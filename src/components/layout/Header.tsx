@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom'
 import { AccountDropdown } from '@/components/wallet/AccountDropdown'
-import { ChainSwitcher } from '@/components/wallet/ChainSwitcher'
+import { ChainModeSwitch } from '@/components/wallet/ChainModeSwitch'
 
 export function Header() {
   return (
@@ -16,7 +16,7 @@ export function Header() {
           predict
         </Link>
         <div className="flex items-center gap-3">
-          <ChainSwitcher />
+          <ChainModeSwitch />
           <AccountDropdown />
         </div>
       </div>
