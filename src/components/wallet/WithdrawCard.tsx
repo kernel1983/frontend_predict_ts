@@ -6,6 +6,7 @@ import { useToast } from '@/components/ui/toast-context'
 import { useUsdcBalance } from '@/hooks/useUsdcBalance'
 import { isUserRejected, toErrorMessage } from '@/lib/wallet'
 import {
+  ZEN_CONTRACT,
   ZENTRA_ENVS,
   buildBridgeOutgoingData,
   formatUsdc,
@@ -51,7 +52,7 @@ export function WithdrawCard({ address }: { address: Address | undefined }) {
     try {
       const hash = await sendTransactionAsync({
         chainId: env.withdrawChainId,
-        to: env.zenContract,
+        to: ZEN_CONTRACT,
         value: 0n,
         data: buildBridgeOutgoingData(raw),
       })
@@ -131,8 +132,8 @@ export function WithdrawCard({ address }: { address: Address | undefined }) {
 
       {!configured && (
         <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-400">
-          {env.withdrawChainName} is not configured yet. The production indexer
-          and zen contract details are pending.
+          {env.withdrawChainName} is not configured yet. The production
+          indexer details are pending.
         </div>
       )}
 

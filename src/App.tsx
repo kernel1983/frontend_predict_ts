@@ -2,6 +2,8 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 import { ProtectedRoute } from '@/components/guards/ProtectedRoute'
 import HomePage from '@/pages/HomePage'
 import LoginPage from '@/pages/LoginPage'
+import MarketPage from '@/pages/MarketPage'
+import PortfolioPage from '@/pages/PortfolioPage'
 
 export default function App() {
   return (
@@ -12,6 +14,22 @@ export default function App() {
         element={
           <ProtectedRoute>
             <HomePage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/portfolio"
+        element={
+          <ProtectedRoute>
+            <PortfolioPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/market/:marketId"
+        element={
+          <ProtectedRoute>
+            <MarketPage />
           </ProtectedRoute>
         }
       />

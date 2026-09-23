@@ -1,4 +1,4 @@
-import { toHex, zeroAddress, type Address, type Hex } from 'viem'
+import { toHex, type Address, type Hex } from 'viem'
 import {
   useChainModeStore,
   type ChainMode,
@@ -6,9 +6,15 @@ import {
 
 export const USDC_DECIMALS = 6
 
+/**
+ * zen 合约地址 = 空地址占位（两个模式相同）。
+ * 链上并没有真正的合约，gazer 只是监听发往该地址的 tx 并解析 input 里的 JSON。
+ */
+export const ZEN_CONTRACT: Address =
+  '0x00000000000000000000000000000000007a656e'
+
 export interface ZentraEnv {
   indexerUrl: string
-  zenContract: Address
   withdrawChainId: number
   withdrawChainName: string
   explorerBase: string
@@ -17,23 +23,21 @@ export interface ZentraEnv {
 export const ZENTRA_ENVS: Record<ChainMode, ZentraEnv> = {
   testnet: {
     indexerUrl: 'https://testnet3.zentra.dev',
-    zenContract: '0x00000000000000000000000000000000007a656e',
     withdrawChainId: 84532,
     withdrawChainName: 'Base Sepolia',
     explorerBase: 'https://sepolia.basescan.org',
   },
   mainnet: {
     indexerUrl: '',
-    zenContract: zeroAddress,
     withdrawChainId: 8453,
     withdrawChainName: 'Base',
     explorerBase: 'https://basescan.org',
   },
 }
 
-/** 正式链参数未填全前视为未配置 */
+/** indexer 未配置视为不可用 */
 export function isEnvConfigured(env: ZentraEnv): boolean {
-  return env.indexerUrl !== '' && env.zenContract !== zeroAddress
+  return env.indexerUrl !== ''
 }
 
 /**

@@ -1,29 +1,55 @@
+import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useAccount } from 'wagmi'
 import { AppLayout } from '@/components/layout/AppLayout'
-import { Avatar } from '@/components/wallet/Avatar'
-import { DepositRow } from '@/components/wallet/DepositRow'
-import { WithdrawCard } from '@/components/wallet/WithdrawCard'
-import { useToast } from '@/components/ui/toast-context'
+import {
+  PredictionCard,
+  type PredictionMarket,
+} from '@/components/prediction/PredictionCard'
+import { DepositModal } from '@/components/wallet/DepositModal'
+import { Button } from '@/components/ui/Button'
 import { useSession } from '@/hooks/useSession'
+import { useUsdcBalance } from '@/hooks/useUsdcBalance'
 import {
   computeDepositAddress,
   depositFactoriesByMode,
   type DepositFactoryConfig,
 } from '@/lib/deposit'
-import { ZENTRA_ENVS } from '@/lib/zentra'
-import { copyToClipboard, isAddressLike, shortAddress } from '@/lib/wallet'
+import { formatUsdc } from '@/lib/zentra'
 import { useChainModeStore } from '@/store/chainMode'
+
+const featuredMarket: PredictionMarket = {
+  asset: 'Bitcoin', symbol: 'BTC', interval: '5 minute', price: '$104,286.42',
+  change: '+0.38%', upChance: 64, endsIn: '02:41', tone: 'orange',
+}
+
+const markets: PredictionMarket[] = [
+  { asset: 'Bitcoin', symbol: 'BTC', interval: '15 minute', price: '$104,286.42', change: '+0.38%', upChance: 61, endsIn: '12:41', tone: 'orange' },
+  { asset: 'Bitcoin', symbol: 'BTC', interval: '1 hour', price: '$104,286.42', change: '+0.38%', upChance: 57, endsIn: '42:41', tone: 'orange' },
+  { asset: 'Ethereum', symbol: 'ETH', interval: '15 minute', price: '$2,516.83', change: '+0.21%', upChance: 53, endsIn: '08:41', tone: 'blue' },
+  { asset: 'Solana', symbol: 'SOL', interval: '1 hour', price: '$148.26', change: '-0.14%', upChance: 46, endsIn: '35:41', tone: 'purple' },
+  { asset: 'XRP', symbol: 'XRP', interval: '15 minute', price: '$2.18', change: '+0.09%', upChance: 51, endsIn: '10:41', tone: 'green' },
+]
+
+function marketPath(market: PredictionMarket) {
+  const secondsByInterval: Record<PredictionMarket['interval'], number> = {
+    '5 minute': 5 * 60,
+    '15 minute': 15 * 60,
+    '1 hour': 60 * 60,
+  }
+  const period = secondsByInterval[market.interval]
+  const timestamp = Math.floor(Date.now() / 1000 / period) * period
+  const interval = market.interval === '5 minute' ? '5m' : market.interval === '15 minute' ? '15m' : '1h'
+  return `/market/${market.symbol.toLowerCase()}_updown_${interval}_${timestamp}`
+}
 
 export default function HomePage() {
   const { user } = useSession()
-  const { address, chain } = useAccount()
+  const { address } = useAccount()
   const { mode } = useChainModeStore()
-  const toast = useToast()
-
-  const deposits = user?.deposits ?? {}
-  const env = ZENTRA_ENVS[mode]
+  const [depositOpen, setDepositOpen] = useState(false)
+  const { data: balance, isLoading: balanceLoading, error: balanceError } = useUsdcBalance(address)
   const factories: DepositFactoryConfig[] = depositFactoriesByMode[mode]
-
   const predicted = address
     ? factories.map((config) => ({
         config,
@@ -31,113 +57,52 @@ export default function HomePage() {
       }))
     : []
 
-  const handleCopy = async (text: string) => {
-    try {
-      await copyToClipboard(text)
-      toast.push({ title: 'Address copied', variant: 'success' })
-    } catch {
-      toast.push({ title: 'Copy failed', variant: 'error' })
-    }
-  }
-
   return (
     <AppLayout>
-      <h1 className="text-2xl font-semibold text-text-h">Account Overview</h1>
-      <p className="mt-1 text-sm text-text">
-        Your wallet identity and per-chain deposit addresses.
-      </p>
-
-      <section className="mt-6 grid gap-4 md:grid-cols-2">
-        <div className="rounded-2xl border border-border bg-bg p-5 shadow-card">
-          <p className="text-xs text-text">Wallet User ID</p>
-          <div className="mt-2 flex items-center gap-2">
-            <p className="font-mono text-base text-text-h">
-              {user?.user_key ?? '—'}
-            </p>
-            {address && <Avatar address={address} size={24} />}
-          </div>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold text-text-h">Markets</h1>
+          <p className="mt-1 text-sm text-text">Predict where crypto prices will move next.</p>
         </div>
+        <div className="flex items-center gap-3">
+          <Link to="/portfolio" className="rounded-xl border border-border bg-bg px-3 py-2 text-right shadow-card transition-colors hover:border-accent-border" aria-label="View portfolio">
+            <p className="text-xs text-text">Available</p>
+            <p className="font-mono text-sm font-medium text-text-h">
+              {balanceLoading ? '…' : balanceError ? '—' : `${formatUsdc(balance ?? 0n, 2)} USDC`}
+            </p>
+          </Link>
+          <Button size="md" onClick={() => setDepositOpen(true)}>Deposit</Button>
+        </div>
+      </div>
 
-        <div className="rounded-2xl border border-border bg-bg p-5 shadow-card">
-          <p className="text-xs text-text">Connected Wallet</p>
-          <div className="mt-2 flex items-center justify-between gap-3">
-            <p className="truncate font-mono text-base text-text-h">
-              {address ?? 'Not connected'}
-            </p>
-            {address && (
-              <button
-                type="button"
-                onClick={() => {
-                  void handleCopy(address)
-                }}
-                className="shrink-0 text-xs text-accent hover:underline"
-              >
-                {shortAddress(address)}
-              </button>
-            )}
-          </div>
-          {chain?.name && (
-            <p className="mt-2 text-xs text-text">
-              Wallet network: {chain.name} · Target: {env.withdrawChainName}
-            </p>
-          )}
+      <section className="mt-8">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <h2 className="text-lg font-semibold text-text-h">Featured market</h2>
+          <span className="text-xs text-text">Short-term · settles soon</span>
+        </div>
+        <PredictionCard market={featuredMarket} featured to={marketPath(featuredMarket)} />
+      </section>
+
+      <section className="mt-8">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <h2 className="text-lg font-semibold text-text-h">More predictions</h2>
+          <span className="text-xs text-text">New markets update regularly</span>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {markets.map((market) => (
+            <PredictionCard key={`${market.symbol}-${market.interval}`} market={market} to={marketPath(market)} />
+          ))}
         </div>
       </section>
 
-      <section className="mt-6 grid gap-4 lg:grid-cols-2">
-        {address && <WithdrawCard address={address} />}
-        <div className="rounded-2xl border border-border bg-bg p-5 shadow-card">
-          <h2 className="text-base font-semibold text-text-h">
-            Deposit Addresses (Predicted)
-          </h2>
-          <p className="mt-1 text-xs text-text">
-            Each network's deposit address is computed from a factory contract
-            via CREATE2. Scan the QR code with your wallet to send funds.
-          </p>
-        {predicted.length === 0 ? (
-          <p className="mt-3 text-sm text-text">
-            {address === null
-              ? 'Connect a wallet to compute your deposit addresses.'
-              : mode === 'mainnet'
-                ? 'Mainnet deposit networks are not configured yet.'
-                : 'No networks have been configured yet.'}
-          </p>
-        ) : (
-          <ul className="mt-3 divide-y divide-border">
-            {predicted.map(({ config, address: item }) =>
-              item ? (
-                <DepositRow
-                  key={config.chainId}
-                  chainLabel={config.chainName}
-                  value={item}
-                  qrDefault
-                />
-              ) : null,
-            )}
-          </ul>
-        )}
-        </div>
-      </section>
-
-      <section className="mt-6 rounded-2xl border border-border bg-bg p-5 shadow-card">
-        <h2 className="text-base font-semibold text-text-h">Per-Chain Deposit Addresses</h2>
-        {Object.keys(deposits).length === 0 ? (
-          <p className="mt-3 text-sm text-text">
-            No deposit addresses yet. They will appear once activated.
-          </p>
-        ) : (
-          <ul className="mt-3 divide-y divide-border">
-            {Object.entries(deposits).map(([key, value]) => (
-              <DepositRow
-                key={key}
-                chainLabel={key}
-                value={typeof value === 'string' ? value : null}
-                canQr={isAddressLike(value)}
-              />
-            ))}
-          </ul>
-        )}
-      </section>
+      <DepositModal
+        open={depositOpen}
+        onClose={() => setDepositOpen(false)}
+        predicted={predicted}
+        deposits={user?.deposits ?? {}}
+        walletConnected={Boolean(address)}
+        mainnet={mode === 'mainnet'}
+      />
     </AppLayout>
   )
 }
