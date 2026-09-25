@@ -41,25 +41,62 @@ export function isEnvConfigured(env: ZentraEnv): boolean {
 }
 
 /**
- * 查询 indexer 上某地址的 USDC 余额（rollup 内部状态）。
- * 状态 key：base-USDC-balance:<addr>；返回原始整数（6 位小数）。
+ * 查询 indexer 上某前缀的状态 value（原始值），未配置/出错抛错。
+ * 返回字符串以保留大整数精度。
  */
-export async function fetchUsdcBalance(address: Address): Promise<bigint> {
+export async function fetchRawState(prefix: string): Promise<string> {
   const env = ZENTRA_ENVS[useChainModeStore.getState().mode]
   if (!isEnvConfigured(env)) {
     throw new Error(`${env.withdrawChainName} is not configured yet.`)
   }
-  const url = `${env.indexerUrl}/api/get_latest_state?prefix=${encodeURIComponent(
-    `base-USDC-balance:${address.toLowerCase()}`,
-  )}`
+  const url = `${env.indexerUrl}/api/get_latest_state?prefix=${encodeURIComponent(prefix)}`
   const res = await fetch(url)
   if (!res.ok) {
-    throw new Error(`Failed to fetch USDC balance (${res.status})`)
+    throw new Error(`Failed to fetch state (${res.status})`)
   }
   const text = await res.text()
-  const match = text.match(/"result"\s*:\s*null|"result"\s*:\s*(-?\d+)/)
-  if (!match || match[0].includes('null')) return 0n
-  return BigInt(match[1])
+  const data = JSON.parse(text, (_key, value) =>
+    typeof value === 'number' && !Number.isSafeInteger(value) ? BigInt(value) : value,
+  ) as { result?: unknown }
+  let val = data?.result ?? null
+  if (Array.isArray(val)) val = val[0] ?? null
+  if (val === null || val === undefined) return '0'
+  return String(val)
+}
+
+/** 查询 indexer 上某地址的 USDC 余额（rollup 内部状态） */
+export async function fetchUsdcBalance(address: Address): Promise<bigint> {
+  return BigInt(await fetchRawState(`base-USDC-balance:${address.toLowerCase()}`))
+}
+
+export interface PredictOrderbook {
+  yes: number | null
+  no: number | null
+}
+
+/** 查询 indexer 上某个 updown slug 的 YES/NO bestAsk 报价（美元） */
+export async function fetchPredictOrderbook(slug: string): Promise<PredictOrderbook> {
+  const env = ZENTRA_ENVS[useChainModeStore.getState().mode]
+  if (!isEnvConfigured(env)) {
+    throw new Error(`${env.withdrawChainName} is not configured yet.`)
+  }
+  const url = `${env.indexerUrl}/api/predict_orderbook?slug=${encodeURIComponent(slug)}`
+  const res = await fetch(url)
+  if (!res.ok) {
+    throw new Error(`Failed to fetch orderbook (${res.status})`)
+  }
+  const data = (await res.json()) as {
+    result?: {
+      yes?: { bestAsk?: string | number | null }
+      no?: { bestAsk?: string | number | null }
+    } | null
+  }
+  const yesAsk = Number(data?.result?.yes?.bestAsk)
+  const noAsk = Number(data?.result?.no?.bestAsk)
+  return {
+    yes: Number.isFinite(yesAsk) && yesAsk > 0 ? yesAsk : null,
+    no: Number.isFinite(noAsk) && noAsk > 0 ? noAsk : null,
+  }
 }
 
 /** 构造发往 zen 合约的 calldata：把 JSON 文本序列化为 utf-8 hex */

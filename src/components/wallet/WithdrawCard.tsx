@@ -1,5 +1,10 @@
 import { useState } from 'react'
-import { useSendTransaction, useWaitForTransactionReceipt } from 'wagmi'
+import {
+  useChainId,
+  useSendTransaction,
+  useSwitchChain,
+  useWaitForTransactionReceipt,
+} from 'wagmi'
 import { type Address } from 'viem'
 import { Button } from '@/components/ui/Button'
 import { useToast } from '@/components/ui/toast-context'
@@ -27,6 +32,8 @@ export function WithdrawCard({ address }: { address: Address | undefined }) {
     refetch,
   } = useUsdcBalance(address)
   const { sendTransactionAsync, isPending: submitting } = useSendTransaction()
+  const { switchChainAsync } = useSwitchChain()
+  const currentChainId = useChainId()
   const [amountInput, setAmountInput] = useState('')
   const [formError, setFormError] = useState<string | null>(null)
   const [txHash, setTxHash] = useState<`0x${string}` | undefined>()
@@ -50,6 +57,9 @@ export function WithdrawCard({ address }: { address: Address | undefined }) {
       return
     }
     try {
+      if (currentChainId !== env.withdrawChainId) {
+        await switchChainAsync({ chainId: env.withdrawChainId })
+      }
       const hash = await sendTransactionAsync({
         chainId: env.withdrawChainId,
         to: ZEN_CONTRACT,

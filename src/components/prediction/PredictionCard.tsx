@@ -1,18 +1,26 @@
 import { cn } from '@/lib/cn'
 import { useNavigate } from 'react-router-dom'
+import {
+  UPDOWN_INTERVAL_LABEL,
+  endOfMonthLabel,
+  isSteady,
+  isUpdown,
+  marketId,
+  type Market,
+} from '@/lib/market'
+
+export type PredictionTone = 'orange' | 'blue' | 'purple' | 'green'
 
 export interface PredictionMarket {
-  asset: string
-  symbol: string
-  interval: string
+  market: Market
   price: string
   change: string
   upChance: number
   endsIn: string
-  tone: 'orange' | 'blue' | 'purple' | 'green'
+  tone: PredictionTone
 }
 
-const toneClass = {
+const toneClass: Record<PredictionTone, string> = {
   orange: 'from-orange-400 to-amber-500',
   blue: 'from-sky-400 to-blue-600',
   purple: 'from-violet-400 to-purple-600',
@@ -44,8 +52,16 @@ export function PredictionCard({
   const rising = !market.change.startsWith('-')
   const navigate = useNavigate()
 
+  const { market: m } = market
+  const updown = isUpdown(m)
+  const steady = isSteady(m)
+  const subtitle = updown
+    ? `${UPDOWN_INTERVAL_LABEL[m.interval]} price prediction`
+    : `End of ${endOfMonthLabel(m.year, m.month)}`
+  const route = to ?? (m.kind ? marketId(m) : undefined)
+
   const openMarket = () => {
-    if (to) navigate(to)
+    if (route) navigate(route)
   }
 
   return (
@@ -53,13 +69,13 @@ export function PredictionCard({
       className={cn(
         'rounded-2xl border border-border bg-bg shadow-card transition-transform hover:-translate-y-0.5',
         featured ? 'overflow-hidden p-6 md:p-7' : 'p-4',
-        to && 'cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent',
+        route && 'cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent',
       )}
-      role={to ? 'link' : undefined}
-      tabIndex={to ? 0 : undefined}
+      role={route ? 'link' : undefined}
+      tabIndex={route ? 0 : undefined}
       onClick={openMarket}
       onKeyDown={(event) => {
-        if (to && (event.key === 'Enter' || event.key === ' ')) {
+        if (route && (event.key === 'Enter' || event.key === ' ')) {
           event.preventDefault()
           openMarket()
         }
@@ -68,11 +84,11 @@ export function PredictionCard({
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-center gap-3">
           <span className={cn('flex items-center justify-center rounded-xl bg-gradient-to-br font-bold text-white', toneClass[market.tone], featured ? 'size-12 text-lg' : 'size-9 text-xs')}>
-            {market.symbol.slice(0, 1)}
+            {m.symbol.slice(0, 1).toUpperCase()}
           </span>
           <div>
-            <h2 className={cn('font-semibold text-text-h', featured ? 'text-xl' : 'text-base')}>{market.asset}</h2>
-            <p className="text-xs text-text">{market.interval} prediction</p>
+            <h2 className={cn('font-semibold text-text-h', featured ? 'text-xl' : 'text-base')}>{m.asset}</h2>
+            <p className="text-xs text-text">{subtitle}</p>
           </div>
         </div>
         <span className="rounded-full bg-accent-bg px-2.5 py-1 text-xs font-medium text-accent">Ends in {market.endsIn}</span>
@@ -80,7 +96,9 @@ export function PredictionCard({
 
       <div className={cn('flex items-end justify-between gap-4', featured ? 'mt-7' : 'mt-5')}>
         <div>
-          <p className={cn('font-mono font-semibold text-text-h', featured ? 'text-3xl' : 'text-xl')}>{market.price}</p>
+          <p className={cn('font-mono font-semibold text-text-h', featured ? 'text-3xl' : 'text-xl')}>
+            {steady ? `Above $${Math.min(...m.targets).toLocaleString('en-US')}+` : market.price}
+          </p>
           <p className={cn('mt-1 text-xs font-medium', rising ? 'text-emerald-500' : 'text-red-500')}>{market.change}</p>
         </div>
         <div className={cn('text-emerald-500', featured ? 'h-20 w-48' : 'h-12 w-28')}>
@@ -88,9 +106,25 @@ export function PredictionCard({
         </div>
       </div>
 
-      <div className={cn('grid grid-cols-2 gap-2', featured ? 'mt-7' : 'mt-5')}>
-        <button type="button" className="rounded-xl bg-emerald-500 px-3 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-emerald-600">Up {market.upChance}¢</button>
-        <button type="button" className="rounded-xl bg-red-500 px-3 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-red-600">Down {100 - market.upChance}¢</button>
+      <div className={cn('mt-5')}>
+        {steady ? (
+          <div className="flex flex-wrap gap-1.5">
+            {m.targets.map((t) => (
+              <span key={t} className="rounded-full bg-accent-bg px-2.5 py-1 text-xs font-medium text-accent">
+                ${(t / 1000).toLocaleString('en-US')}k
+              </span>
+            ))}
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-2">
+            <button type="button" className="rounded-xl bg-emerald-500 px-3 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-emerald-600">
+              Up {market.upChance}¢
+            </button>
+            <button type="button" className="rounded-xl bg-red-500 px-3 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-red-600">
+              Down {100 - market.upChance}¢
+            </button>
+          </div>
+        )}
       </div>
     </article>
   )

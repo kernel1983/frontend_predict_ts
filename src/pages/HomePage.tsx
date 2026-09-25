@@ -16,31 +16,25 @@ import {
   type DepositFactoryConfig,
 } from '@/lib/deposit'
 import { formatUsdc } from '@/lib/zentra'
+import { marketId } from '@/lib/market'
 import { useChainModeStore } from '@/store/chainMode'
 
 const featuredMarket: PredictionMarket = {
-  asset: 'Bitcoin', symbol: 'BTC', interval: '5 minute', price: '$104,286.42',
-  change: '+0.38%', upChance: 64, endsIn: '02:41', tone: 'orange',
+  market: { kind: 'updown', symbol: 'btc', asset: 'Bitcoin', interval: '5m' },
+  price: '$104,286.42', change: '+0.38%', upChance: 64, endsIn: '02:41', tone: 'orange',
 }
 
 const markets: PredictionMarket[] = [
-  { asset: 'Bitcoin', symbol: 'BTC', interval: '15 minute', price: '$104,286.42', change: '+0.38%', upChance: 61, endsIn: '12:41', tone: 'orange' },
-  { asset: 'Bitcoin', symbol: 'BTC', interval: '1 hour', price: '$104,286.42', change: '+0.38%', upChance: 57, endsIn: '42:41', tone: 'orange' },
-  { asset: 'Ethereum', symbol: 'ETH', interval: '15 minute', price: '$2,516.83', change: '+0.21%', upChance: 53, endsIn: '08:41', tone: 'blue' },
-  { asset: 'Solana', symbol: 'SOL', interval: '1 hour', price: '$148.26', change: '-0.14%', upChance: 46, endsIn: '35:41', tone: 'purple' },
-  { asset: 'XRP', symbol: 'XRP', interval: '15 minute', price: '$2.18', change: '+0.09%', upChance: 51, endsIn: '10:41', tone: 'green' },
+  { market: { kind: 'updown', symbol: 'btc', asset: 'Bitcoin', interval: '15m' }, price: '$104,286.42', change: '+0.38%', upChance: 61, endsIn: '12:41', tone: 'orange' },
+  { market: { kind: 'updown', symbol: 'btc', asset: 'Bitcoin', interval: '1h' }, price: '$104,286.42', change: '+0.38%', upChance: 57, endsIn: '42:41', tone: 'orange' },
+  { market: { kind: 'updown', symbol: 'eth', asset: 'Ethereum', interval: '15m' }, price: '$2,516.83', change: '+0.21%', upChance: 53, endsIn: '08:41', tone: 'blue' },
+  { market: { kind: 'updown', symbol: 'sol', asset: 'Solana', interval: '1h' }, price: '$148.26', change: '-0.14%', upChance: 46, endsIn: '35:41', tone: 'purple' },
+  { market: { kind: 'updown', symbol: 'hype', asset: 'Hyperliquid', interval: '15m' }, price: '$25.34', change: '+3.12%', upChance: 54, endsIn: '10:41', tone: 'purple' },
+  { market: { kind: 'steady', symbol: 'btc', asset: 'Bitcoin', year: 2026, month: 9, targets: [60000, 70000, 80000, 90000, 100000] }, price: '$104,286.42', change: '+0.38%', upChance: 70, endsIn: 'Sep 30', tone: 'orange' },
 ]
 
-function marketPath(market: PredictionMarket) {
-  const secondsByInterval: Record<PredictionMarket['interval'], number> = {
-    '5 minute': 5 * 60,
-    '15 minute': 15 * 60,
-    '1 hour': 60 * 60,
-  }
-  const period = secondsByInterval[market.interval]
-  const timestamp = Math.floor(Date.now() / 1000 / period) * period
-  const interval = market.interval === '5 minute' ? '5m' : market.interval === '15 minute' ? '15m' : '1h'
-  return `/market/${market.symbol.toLowerCase()}_updown_${interval}_${timestamp}`
+function marketPath(market: PredictionMarket): string {
+  return `/market/${marketId(market.market)}`
 }
 
 export default function HomePage() {
@@ -50,6 +44,7 @@ export default function HomePage() {
   const [depositOpen, setDepositOpen] = useState(false)
   const { data: balance, isLoading: balanceLoading, error: balanceError } = useUsdcBalance(address)
   const factories: DepositFactoryConfig[] = depositFactoriesByMode[mode]
+  console.log(address);
   const predicted = address
     ? factories.map((config) => ({
         config,
@@ -90,7 +85,7 @@ export default function HomePage() {
         </div>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {markets.map((market) => (
-            <PredictionCard key={`${market.symbol}-${market.interval}`} market={market} to={marketPath(market)} />
+            <PredictionCard key={`${market.market.symbol}-${market.market.kind}`} market={market} to={marketPath(market)} />
           ))}
         </div>
       </section>
