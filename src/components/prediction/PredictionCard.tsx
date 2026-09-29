@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import {
   UPDOWN_INTERVAL_LABEL,
   endOfMonthLabel,
+  isLive,
+  isNotLive,
   isSteady,
   isUpdown,
   marketId,
@@ -55,9 +57,14 @@ export function PredictionCard({
   const { market: m } = market
   const updown = isUpdown(m)
   const steady = isSteady(m)
+  const live = isLive(m) || isNotLive(m)
   const subtitle = updown
     ? `${UPDOWN_INTERVAL_LABEL[m.interval]} price prediction`
-    : `End of ${endOfMonthLabel(m.year, m.month)}`
+    : live
+      ? isNotLive(m)
+        ? 'Control · market not created'
+        : 'Continuous · no settlement'
+      : `End of ${endOfMonthLabel(m.year, m.month)}`
   const route = to ?? (m.kind ? marketId(m) : undefined)
 
   const openMarket = () => {

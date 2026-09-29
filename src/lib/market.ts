@@ -1,4 +1,4 @@
-export type MarketKind = 'updown' | 'steady'
+export type MarketKind = 'updown' | 'steady' | 'live' | 'notlive'
 
 export type UpdownInterval = '5m' | '15m' | '1h'
 
@@ -22,7 +22,21 @@ export interface SteadyMarket {
   targets: number[]
 }
 
-export type Market = UpdownMarket | SteadyMarket
+/** 无结束时间的连续 updown：{symbol}_updown_live。不按轮次结算，仅作 testnet 调试模板 */
+export interface LiveUpdownMarket {
+  kind: 'live'
+  symbol: string
+  asset: string
+}
+
+/** 对照 slug：{symbol}_updown_notlive。用作「市场未创建」状态的调试对照页 */
+export interface NotLiveUpdownMarket {
+  kind: 'notlive'
+  symbol: string
+  asset: string
+}
+
+export type Market = UpdownMarket | SteadyMarket | LiveUpdownMarket | NotLiveUpdownMarket
 
 const ASSETS: Record<string, string> = {
   btc: 'Bitcoin',
@@ -73,6 +87,8 @@ export function steadyEndTs(year: number, month: number): number {
 
 const UPDOWN_RE = /^([a-z0-9]+)_updown_(5m|15m|1h)(?:_(\d{12}))?$/
 const STEADY_RE = /^([a-z0-9]+)_eom_(\d{4})(\d{2})$/
+const LIVE_RE = /^([a-z0-9]+)_updown_live$/
+const NOTLIVE_RE = /^([a-z0-9]+)_updown_notlive$/
 const STAMP_RE = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})$/
 
 /** epoch 秒 → YYYYMMDDHHMM(UTC) */
@@ -127,6 +143,22 @@ export function parseMarketId(id: string): Market | null {
       targets: steadyTargets(st[1]),
     }
   }
+  const live = id.match(LIVE_RE)
+  if (live) {
+    return {
+      kind: 'live',
+      symbol: live[1],
+      asset: assetName(live[1]),
+    }
+  }
+  const notlive = id.match(NOTLIVE_RE)
+  if (notlive) {
+    return {
+      kind: 'notlive',
+      symbol: notlive[1],
+      asset: assetName(notlive[1]),
+    }
+  }
   return null
 }
 
@@ -136,6 +168,14 @@ export function isUpdown(market: Market): market is UpdownMarket {
 
 export function isSteady(market: Market): market is SteadyMarket {
   return market.kind === 'steady'
+}
+
+export function isLive(market: Market): market is LiveUpdownMarket {
+  return market.kind === 'live'
+}
+
+export function isNotLive(market: Market): market is NotLiveUpdownMarket {
+  return market.kind === 'notlive'
 }
 
 /** 周期起点（UTC）：未指定 timestamp 时取当前周期 */
@@ -150,11 +190,27 @@ export function updownSlug(market: UpdownMarket): string {
   return `${market.symbol.toLowerCase()}_updown_${market.interval}_${toRoundStamp(updownWindowStart(market))}`
 }
 
+/** 无结束时间 updown 的下单/余额 slug，如 btc_updown_live */
+export function liveUpdownSlug(market: LiveUpdownMarket): string {
+  return `${market.symbol.toLowerCase()}_updown_live`
+}
+
+/** 对照 slug，如 btc_updown_notlive */
+export function notLiveSlug(market: NotLiveUpdownMarket): string {
+  return `${market.symbol.toLowerCase()}_updown_notlive`
+}
+
 /** 生成 URL/下单 slug，updown 未给 timestamp 时取当前周期起点（UTC） */
 export function marketId(market: Market): string {
   if (isUpdown(market)) {
     const startSec = updownWindowStart(market)
     return `${market.symbol.toLowerCase()}_updown_${market.interval}_${toRoundStamp(startSec)}`
+  }
+  if (isLive(market)) {
+    return liveUpdownSlug(market)
+  }
+  if (isNotLive(market)) {
+    return notLiveSlug(market)
   }
   return `${market.symbol.toLowerCase()}_eom_${market.year}${String(market.month).padStart(2, '0')}`
 }

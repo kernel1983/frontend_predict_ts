@@ -12,14 +12,17 @@ export function MarketPanel({
   currentPrice: number | null
   target: number | null
   finalPrice: number | null
-  yesPrice: number
-  noPrice: number
+  yesPrice: number | null
+  noPrice: number | null
 }) {
-  const yesRatio = (100 * yesPrice) / (yesPrice + noPrice) || 50
+  const yesRatio =
+    yesPrice !== null && noPrice !== null ? (100 * yesPrice) / (yesPrice + noPrice) : null
   const settled = !isLive && finalPrice !== null && target !== null
   const won = settled && finalPrice !== null && target !== null ? finalPrice > target : null
-  const fmt = (n: number) =>
-    `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  const fmt = (n: number | null) =>
+    n === null
+      ? '—'
+      : `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
   return (
     <section className="rounded-2xl border border-border bg-bg p-5 shadow-card">
@@ -49,12 +52,20 @@ export function MarketPanel({
             <span className="font-mono text-sm text-text-h">{fmt(yesPrice)}</span>
           </div>
           <div className="mt-2 flex h-8 overflow-hidden rounded-lg text-xs font-semibold text-white">
-            <div className="flex items-center justify-center bg-emerald-500" style={{ width: `${Math.round(yesRatio)}%` }}>
-              {Math.round(yesRatio)}%
-            </div>
-            <div className="flex items-center justify-center bg-red-500" style={{ width: `${100 - Math.round(yesRatio)}%` }}>
-              {100 - Math.round(yesRatio)}%
-            </div>
+            {yesRatio === null ? (
+              <div className="flex w-full items-center justify-center bg-border text-text-h">
+                no orderbook
+              </div>
+            ) : (
+              <>
+                <div className="flex items-center justify-center bg-emerald-500" style={{ width: `${Math.round(yesRatio)}%` }}>
+                  {Math.round(yesRatio)}%
+                </div>
+                <div className="flex items-center justify-center bg-red-500" style={{ width: `${100 - Math.round(yesRatio)}%` }}>
+                  {100 - Math.round(yesRatio)}%
+                </div>
+              </>
+            )}
           </div>
           <div className="mt-2 flex items-center justify-between">
             <span className="text-sm font-semibold text-red-600 dark:text-red-400">NO / Down</span>
@@ -79,7 +90,7 @@ export function MarketPanel({
             )}
           </div>
           <p className="mt-3 text-xs text-text">
-            Orderbook will be available when on-chain trading is live.
+            Prices are live orderbook best asks — “—” means no resting orders on that side.
           </p>
         </>
       )}

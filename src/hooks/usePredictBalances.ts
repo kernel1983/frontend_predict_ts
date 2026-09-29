@@ -26,13 +26,13 @@ export function usePredictBalances(
   })
   const yes = useQuery({
     queryKey: ['predict-balances', 'yes', addr, slug, refreshKey],
-    queryFn: () => fetchOne(`predict-${slug}_yes_balance:${addr}`),
+    queryFn: () => fetchOne(`base-predict-${slug}_yes_balance:${addr}`),
     enabled: Boolean(addr) && enabled,
     refetchInterval: 5_000,
   })
   const no = useQuery({
     queryKey: ['predict-balances', 'no', addr, slug, refreshKey],
-    queryFn: () => fetchOne(`predict-${slug}_no_balance:${addr}`),
+    queryFn: () => fetchOne(`base-predict-${slug}_no_balance:${addr}`),
     enabled: Boolean(addr) && enabled,
     refetchInterval: 5_000,
   })

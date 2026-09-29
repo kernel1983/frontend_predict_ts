@@ -90,6 +90,39 @@ export default function HomePage() {
         </div>
       </section>
 
+      {mode === 'testnet' && (
+        <section className="mt-8">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <h2 className="text-lg font-semibold text-text-h">Debug (testnet)</h2>
+            <span className="text-xs text-text">live vs notlive control</span>
+          </div>
+          <PredictionCard
+            market={{
+              market: { kind: 'live', symbol: 'btc', asset: 'Bitcoin' },
+              price: '$104,286.42',
+              change: '+0.38%',
+              upChance: 50,
+              endsIn: 'Live',
+              tone: 'orange',
+            }}
+            to="/market/btc_updown_live"
+          />
+          <div className="mt-3">
+            <PredictionCard
+              market={{
+                market: { kind: 'notlive', symbol: 'btc', asset: 'Bitcoin' },
+                price: '$104,286.42',
+                change: '+0.38%',
+                upChance: 50,
+                endsIn: '—',
+                tone: 'purple',
+              }}
+              to="/market/btc_updown_notlive"
+            />
+          </div>
+        </section>
+      )}
+
       <DepositModal
         open={depositOpen}
         onClose={() => setDepositOpen(false)}

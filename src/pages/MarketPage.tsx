@@ -1,8 +1,9 @@
 import { Link, useParams } from 'react-router-dom'
 import { AppLayout } from '@/components/layout/AppLayout'
+import { LiveUpdownTemplate } from '@/components/market/LiveUpdownTemplate'
 import { SteadyTemplate } from '@/components/market/SteadyTemplate'
 import { UpdownTemplate } from '@/components/market/UpdownTemplate'
-import { isSteady, isUpdown, parseMarketId } from '@/lib/market'
+import { isLive, isNotLive, isSteady, isUpdown, parseMarketId } from '@/lib/market'
 
 export default function MarketPage() {
   const { marketId } = useParams()
@@ -28,6 +29,10 @@ export default function MarketPage() {
 
   if (isSteady(market)) {
     return <SteadyTemplate market={market} />
+  }
+
+  if (isLive(market) || isNotLive(market)) {
+    return <LiveUpdownTemplate market={market} />
   }
 
   return null

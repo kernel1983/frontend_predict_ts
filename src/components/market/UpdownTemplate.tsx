@@ -128,20 +128,17 @@ export function UpdownTemplate({ market }: { market: UpdownMarket }) {
     refetchInterval: 2_000,
   })
 
-  let heurYes = 0.5
-  if (target !== null && livePrice !== null) {
-    const maxOffset = target * 0.02
-    const diff = livePrice - target
-    const normalized = Math.min(1, Math.abs(diff) / maxOffset)
-    heurYes = diff > 0 ? 0.5 + normalized * 0.45 : 0.5 - normalized * 0.45
-  }
-  const yesPrice = book?.yes ?? heurYes
-  const noPrice = book?.no ?? 1 - heurYes
+  // 只用真实盘口报价：某一侧没有挂单（无 bestAsk）时为 null，界面显示 —
+  const yesPrice = book?.yes ?? null
+  const noPrice = book?.no ?? null
+  const yesBid = book?.yesBid ?? null
+  const noBid = book?.noBid ?? null
 
   const balances = usePredictBalances(address?.toLowerCase(), slug, isCurrent && configured, balTick)
   const lastPrice = isCurrent ? livePrice : finalPrice
 
   const nav = (timestamp: number) => {
+    wasLiveRef.current = false
     navigate(`/market/${marketId({ ...market, timestamp })}`)
   }
 
@@ -227,6 +224,10 @@ export function UpdownTemplate({ market }: { market: UpdownMarket }) {
             usdcRaw={balances.usdcRaw}
             yesRaw={balances.yesRaw}
             noRaw={balances.noRaw}
+            upAsk={yesPrice}
+            downAsk={noPrice}
+            upBid={yesBid}
+            downBid={noBid}
             enabled={isCurrent && Boolean(hlCoin)}
             onTraded={() => setBalTick((t) => t + 1)}
           />
