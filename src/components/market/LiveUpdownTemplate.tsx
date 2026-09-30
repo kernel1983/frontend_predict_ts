@@ -1,20 +1,24 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAccount } from 'wagmi'
 import { useQuery } from '@tanstack/react-query'
 import { AppLayout } from '@/components/layout/AppLayout'
+import { PriceSourceSwitch } from '@/components/market/PriceSourceSwitch'
 import { BalancesPanel } from '@/components/market/updown/BalancesPanel'
 import { MarketPanel } from '@/components/market/updown/MarketPanel'
-import { PriceChart, type PricePoint } from '@/components/market/updown/PriceChart'
+import { PriceChart } from '@/components/market/updown/PriceChart'
 import { TradePanel } from '@/components/market/updown/TradePanel'
+import { useCbBtcPrice } from '@/hooks/useCbBtcPrice'
 import { usePredictBalances } from '@/hooks/usePredictBalances'
+import { type CbBtcRecord } from '@/lib/cbbtc'
+import { WINDOW_SEC, emptyPriceState, ingestPrice, type PriceState } from '@/lib/priceCurve'
 import {
   liveUpdownSlug,
   notLiveSlug,
   type LiveUpdownMarket,
   type NotLiveUpdownMarket,
 } from '@/lib/market'
-import { HyperliquidWS, fetchCandleSnapshot, hlCoinFor } from '@/lib/hyperliquid'
+import { HyperliquidWS, hlCoinFor } from '@/lib/hyperliquid'
 import {
   ZENTRA_ENVS,
   fetchPredictMarketProbe,
@@ -23,6 +27,7 @@ import {
   isEnvConfigured,
 } from '@/lib/zentra'
 import { useChainModeStore } from '@/store/chainMode'
+import { usePriceSourceStore } from '@/store/priceSource'
 import { cn } from '@/lib/cn'
 
 const fmtPrice = (n: number) =>
@@ -49,20 +54,50 @@ export function LiveUpdownTemplate({
   const configured = isEnvConfigured(env)
   const testnet = mode === 'testnet'
   const isUpdownLive = market.kind === 'live'
+  const isBtc = market.symbol.toLowerCase() === 'btc'
+
+  const source = usePriceSourceStore((s) => s.source)
+  /** base 源只有 cbBTC（BTC），其他 symbol / notlive 页固定走 Hyperliquid */
+  const showSourceSwitch = isUpdownLive && isBtc
+  const useBase = showSourceSwitch && source === 'base'
 
   const hlCoin = hlCoinFor(market.symbol)
   const slug = isUpdownLive ? liveUpdownSlug(market) : notLiveSlug(market)
 
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000))
-  const minuteStart = Math.floor(now / 60) * 60
-  const [price, setPrice] = useState<number | null>(null)
-  const [connected, setConnected] = useState(false)
-  const [points, setPoints] = useState<PricePoint[]>([])
-  const [target, setTarget] = useState<number | null>(null)
+  const [hlConnected, setHlConnected] = useState(false)
   const [balTick, setBalTick] = useState(0)
-  const minuteRef = useRef(0)
+
+  /** 换源/换 symbol 换掉整个 key，把曲线、Last price 一起清空 */
+  const feedKey = `${useBase ? 'base' : 'hl'}:${hlCoin ?? ''}`
+  const [chart, setChart] = useState<PriceState>(() => emptyPriceState(feedKey))
+  if (chart.key !== feedKey) setChart(emptyPriceState(feedKey))
+  const { price, points } = chart
 
   const { address } = useAccount()
+
+  /** 把一个价格并入曲线（连续，不按分钟重置） */
+  const ingest = useCallback(
+    (value: number, atSec: number) =>
+      setChart((prev) => ingestPrice(prev, feedKey, value, atSec)),
+    [feedKey],
+  )
+
+  // base 源：推送自带服务端时间戳，迟到几秒就覆盖最后一个点
+  const lastBasePrice = useRef<number | null>(null)
+  const handleBaseRecord = useCallback(
+    (record: CbBtcRecord) => {
+      lastBasePrice.current = record.priceUsd
+      ingest(record.priceUsd, record.ts)
+    },
+    [ingest],
+  )
+  const base = useCbBtcPrice(useBase, handleBaseRecord)
+  const connected = useBase ? base.connected : hlConnected
+  /** 距上次真实推送多久了（补点后价格仍是这个，只是没更新） */
+  const baseAgeSec = useBase && base.record ? Math.max(0, now - base.record.ts) : null
+  const baseAgeLabel =
+    baseAgeSec === null ? null : baseAgeSec > 90 ? `held ${baseAgeSec}s` : `${baseAgeSec}s ago`
 
   // 1s 心跳
   useEffect(() => {
@@ -70,64 +105,42 @@ export function LiveUpdownTemplate({
     return () => clearInterval(t)
   }, [])
 
+  /**
+   * ws.py 的推送间隔不固定（poll 每 15s，codex-ws 只在池子成交时推），
+   * 所以没新推送的秒沿用上一个价格补点：曲线一直画到当前时间，不再按分钟重置。
+   */
+  useEffect(() => {
+    if (!useBase) return
+    lastBasePrice.current = null
+    const t = setInterval(() => {
+      const held = lastBasePrice.current
+      if (held === null) return
+      ingest(held, Math.floor(Date.now() / 1000))
+    }, 1_000)
+    return () => clearInterval(t)
+  }, [useBase, ingest])
+
   // WS 行情订阅：trades/candle 事件回调里更新价格与秒级点（持续，无轮次）
   useEffect(() => {
-    if (!hlCoin) return
+    if (!hlCoin || useBase) return
     const ws = new HyperliquidWS()
     ws.on('price', (data) => {
       const p = (data as { price: number }).price
-      setPrice(p)
-      const nowSec = Math.floor(Date.now() / 1000)
-      const mStart = Math.floor(nowSec / 60) * 60
-      if (minuteRef.current !== mStart) {
-        minuteRef.current = mStart
-        setPoints([{ time: nowSec, value: p }])
-        setTarget(null)
-        return
-      }
-      setPoints((prev) => {
-        if (prev.length === 0) return [{ time: nowSec, value: p }]
-        const last = prev[prev.length - 1]
-        if (last.time === nowSec) return [...prev.slice(0, -1), { time: nowSec, value: p }]
-        return [...prev, { time: nowSec, value: p }]
-      })
+      ingest(p, Math.floor(Date.now() / 1000))
     })
     ws.on('candle', (data) => {
-      setPrice((data as { candle: { close: number } }).candle.close)
+      const close = (data as { candle: { close: number } }).candle.close
+      setChart((prev) => (prev.key === feedKey ? { ...prev, price: close } : prev))
     })
-    ws.on('connected', () => setConnected(true))
-    ws.on('disconnected', () => setConnected(false))
+    ws.on('connected', () => setHlConnected(true))
+    ws.on('disconnected', () => setHlConnected(false))
     ws.connect()
     ws.subscribeTrades(hlCoin)
     ws.subscribeCandle(hlCoin, '1m')
     return () => {
       ws.disconnect()
     }
-  }, [hlCoin])
-
-  // 当前分钟内拉取 1m 蜡烛：该分钟 open 作为不断滚动更新的 Target，并回填秒级价格
-  useEffect(() => {
-    if (!hlCoin) return
-    let cancelled = false
-    const fetchFrom = minuteStart * 1000
-    const fetchTo = Math.max(fetchFrom, Date.now())
-    fetchCandleSnapshot(hlCoin, fetchFrom, fetchTo)
-      .then((candles) => {
-        if (cancelled || candles.length === 0) return
-        const c = candles[0]
-        const cTs = Math.floor(c.t / 1000)
-        const nowSec = Math.floor(Date.now() / 1000)
-        const backfilled: PricePoint[] = []
-        for (let s = cTs; s <= nowSec; s++) backfilled.push({ time: s, value: c.o })
-        minuteRef.current = minuteStart
-        setPoints(backfilled)
-        setTarget(c.o)
-      })
-      .catch((err) => console.error('Live template candle fetch failed:', err))
-    return () => {
-      cancelled = true
-    }
-  }, [hlCoin, minuteStart])
+  }, [hlCoin, useBase, feedKey, ingest])
 
   // YES/NO 报价（orderbook 实时轮询；无挂单时用启发式占位）
   const { data: book } = useQuery({
@@ -200,31 +213,46 @@ export function LiveUpdownTemplate({
       <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
         <div className="space-y-6">
           <section className="rounded-2xl border border-border bg-bg p-5 shadow-card">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-3">
               <div>
-                <p className="text-xs text-text">Last price · {market.symbol.toUpperCase()}</p>
+                <p className="text-xs text-text">
+                  Last price ·{' '}
+                  {useBase ? 'cbBTC/USDC (Base)' : `${market.symbol.toUpperCase()} (Hyperliquid)`}
+                </p>
                 <p className="font-mono text-2xl font-semibold text-text-h">
                   {price !== null ? fmtPrice(price) : '—'}
                 </p>
               </div>
-              <div className="text-right">
-                <p className="text-xs text-text">
-                  Target {target !== null ? fmtPrice(target) : '—'}
-                </p>
-                <p className="mt-1 text-xs">
-                  <span
-                    className={cn(
-                      'mr-1.5 inline-block size-1.5 rounded-full align-middle',
-                      connected ? 'bg-emerald-500' : 'bg-red-500',
+              <div className="flex items-start gap-3">
+                <div className="text-right">
+                  <p className="text-xs">
+                    <span
+                      className={cn(
+                        'mr-1.5 inline-block size-1.5 rounded-full align-middle',
+                        connected ? 'bg-emerald-500' : 'bg-red-500',
+                      )}
+                    />
+                    {connected ? (useBase ? 'Live via Base' : 'Live via Hyperliquid') : 'Disconnected'}
+                    {baseAgeLabel && (
+                      <span
+                        className={cn(
+                          'ml-1.5',
+                          baseAgeSec !== null && baseAgeSec > 90
+                            ? 'text-amber-600 dark:text-amber-400'
+                            : 'text-text',
+                        )}
+                      >
+                        {baseAgeLabel}
+                      </span>
                     )}
-                  />
-                  {connected ? 'Live via Hyperliquid' : 'Disconnected'}
-                </p>
+                  </p>
+                </div>
+                {showSourceSwitch && <PriceSourceSwitch />}
               </div>
             </div>
             <div className="mt-4">
               {hlCoin ? (
-                <PriceChart points={points} target={target} />
+                <PriceChart points={points} target={null} />
               ) : (
                 <div className="flex h-[220px] items-center justify-center rounded-xl border border-border text-sm text-text">
                   No price feed for {market.symbol.toUpperCase()}.
@@ -236,7 +264,7 @@ export function LiveUpdownTemplate({
           <MarketPanel
             isLive
             currentPrice={price}
-            target={target}
+            target={null}
             finalPrice={null}
             yesPrice={yesPrice}
             noPrice={noPrice}
@@ -347,9 +375,15 @@ export function LiveUpdownTemplate({
                 </div>
 
                 <div className="flex items-center justify-between gap-3">
-                  <dt className="shrink-0 text-text">Target (rolling)</dt>
-                  <dd className="font-mono text-amber-600 dark:text-amber-400">
-                    {target !== null ? fmtPrice(target) : '—'}
+                  <dt className="shrink-0 text-text">Chart points</dt>
+                  <dd className="font-mono text-text-h">
+                    {points.length}
+                    {points.length > 1 && (
+                      <span className="text-text">
+                        {' '}
+                        (rolling {points[points.length - 1].time - points[0].time}s)
+                      </span>
+                    )}
                   </dd>
                 </div>
 
@@ -360,6 +394,88 @@ export function LiveUpdownTemplate({
                   </dd>
                 </div>
               </dl>
+
+              {showSourceSwitch && (
+                <div className="mt-4 rounded-xl border border-border bg-bg p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs text-text">Price source</p>
+                    <PriceSourceSwitch />
+                  </div>
+                  <dl className="mt-2 space-y-1 text-[11px]">
+                    <div className="flex justify-between gap-2">
+                      <dt className="text-text">feed</dt>
+                      <dd className="truncate font-mono text-text-h">
+                        {useBase
+                          ? `cbBTC/${base.hello?.quote ?? 'USDC'} · base ${base.hello?.networkId ?? 8453}`
+                          : `${hlCoin ?? '—'} perp · hyperliquid`}
+                      </dd>
+                    </div>
+                    {useBase && (
+                      <>
+                        <div className="flex justify-between gap-2">
+                          <dt className="shrink-0 text-text">socket</dt>
+                          <dd className="truncate font-mono text-text-h" title={base.url}>
+                            {base.url}
+                          </dd>
+                        </div>
+                        <div className="flex justify-between gap-2">
+                          <dt className="shrink-0 text-text">upstream</dt>
+                          <dd className="font-mono text-text-h">
+                            {base.degraded
+                              ? `poll (${base.degraded.code})`
+                              : base.record?.mode || (base.connected ? 'connecting…' : '—')}
+                          </dd>
+                        </div>
+                        <div className="flex justify-between gap-2">
+                          <dt className="shrink-0 text-text">pool / block</dt>
+                          <dd className="truncate font-mono text-text-h">
+                            {base.hello?.pool
+                              ? `${base.hello.pool.slice(0, 8)}…${
+                                  base.record?.blockNumber != null
+                                    ? ` · ${base.record.blockNumber.toLocaleString()}`
+                                    : ''
+                                }`
+                              : '—'}
+                          </dd>
+                        </div>
+                        <div className="flex justify-between gap-2">
+                          <dt className="shrink-0 text-text">last push</dt>
+                          <dd
+                            className={cn(
+                              'font-mono',
+                              baseAgeSec !== null && baseAgeSec > 90
+                                ? 'text-amber-600 dark:text-amber-400'
+                                : 'text-text-h',
+                            )}
+                          >
+                            {baseAgeSec === null
+                              ? 'no data yet'
+                              : baseAgeSec > 90
+                                ? `held ${baseAgeSec}s`
+                                : `${baseAgeSec}s ago`}
+                          </dd>
+                        </div>
+                        <div className="flex justify-between gap-2">
+                          <dt className="shrink-0 text-text">clients</dt>
+                          <dd className="font-mono text-text-h">{base.hello?.clients ?? '—'}</dd>
+                        </div>
+                      </>
+                    )}
+                  </dl>
+                  {useBase && !base.connected && base.error && (
+                    <p className="mt-2 text-[11px] text-red-500">
+                      {base.error.code}: {base.error.message} — is <code>python ws.py</code>{' '}
+                      running?
+                    </p>
+                  )}
+                  {useBase && base.degraded && (
+                    <p className="mt-2 text-[11px] text-amber-600 dark:text-amber-400">
+                      Codex ws refused ({base.degraded.message}) → polling every{' '}
+                      {base.degraded.intervalSec ?? '?'}s
+                    </p>
+                  )}
+                </div>
+              )}
 
               <div className="mt-4 rounded-xl border border-border bg-bg p-3">
                 <p className="text-xs text-text">Live Up / Down prices (best ask)</p>
@@ -410,9 +526,10 @@ export function LiveUpdownTemplate({
       </div>
 
       <p className="mt-6 text-center text-xs text-text">
-        Continuous up/down market with no settlement. Target rolls every minute with the latest
-        1-minute Hyperliquid open. Orders go to the zen address ({env.withdrawChainName}) via
-        signed JSON calldata.
+        Continuous up/down market with no settlement. The chart keeps a rolling window of the last{' '}
+        {WINDOW_SEC / 60} minutes and is never reset, from{' '}
+        {useBase ? 'cbBTC/USDC (Base pool)' : 'Hyperliquid trades'}. Orders go to the zen address (
+        {env.withdrawChainName}) via signed JSON calldata.
       </p>
     </AppLayout>
   )

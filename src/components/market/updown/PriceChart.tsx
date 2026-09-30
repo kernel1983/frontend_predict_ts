@@ -9,10 +9,9 @@ import {
   type UTCTimestamp,
 } from 'lightweight-charts'
 
-export interface PricePoint {
-  time: number
-  value: number
-}
+import { ascOrderedPoints, type PricePoint } from '@/lib/priceCurve'
+
+export type { PricePoint }
 
 export function PriceChart({
   points,
@@ -81,7 +80,9 @@ export function PriceChart({
   useEffect(() => {
     const series = seriesRef.current
     if (!series) return
-    series.setData(points.map((p) => ({ time: p.time as UTCTimestamp, value: p.value })))
+    series.setData(
+      ascOrderedPoints(points).map((p) => ({ time: p.time as UTCTimestamp, value: p.value })),
+    )
     chartRef.current?.timeScale().scrollToRealTime()
   }, [points])
 
