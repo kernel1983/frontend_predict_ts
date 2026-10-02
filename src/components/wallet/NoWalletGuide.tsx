@@ -1,4 +1,5 @@
 const DOWNLOAD_URLS: { name: string; href: string }[] = [
+  { name: 'Rabby Wallet', href: 'https://rabby.io/' },
   { name: 'MetaMask', href: 'https://metamask.io/download/' },
   { name: 'WalletConnect', href: 'https://walletconnect.com/network' },
   { name: 'Coinbase Wallet', href: 'https://www.coinbase.com/wallet' },
