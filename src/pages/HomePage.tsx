@@ -1,40 +1,124 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAccount } from 'wagmi'
 import { AppLayout } from '@/components/layout/AppLayout'
 import {
   PredictionCard,
   type PredictionMarket,
+  type PredictionTone,
 } from '@/components/prediction/PredictionCard'
 import { DepositModal } from '@/components/wallet/DepositModal'
 import { Button } from '@/components/ui/Button'
+import { Spinner } from '@/components/ui/Spinner'
 import { useSession } from '@/hooks/useSession'
 import { useUsdcBalance } from '@/hooks/useUsdcBalance'
+import { useMarkets } from '@/hooks/useMarkets'
+import { useAssetCtxs } from '@/hooks/useAssetCtxs'
 import {
   computeDepositAddress,
   depositFactoriesByMode,
   type DepositFactoryConfig,
 } from '@/lib/deposit'
 import { formatUsdc } from '@/lib/zentra'
-import { marketId } from '@/lib/market'
+import { hlCoinFor, type HlAssetCtx } from '@/lib/hyperliquid'
+import {
+  UPDOWN_INTERVAL_SECONDS,
+  endOfMonthLabel,
+  isLive,
+  isNotLive,
+  isSteady,
+  isUpdown,
+  marketId,
+  parseMarketId,
+  type Market,
+} from '@/lib/market'
+import { supabaseConfigured, type MarketRow } from '@/lib/supabase'
 import { useChainModeStore } from '@/store/chainMode'
 
-const featuredMarket: PredictionMarket = {
-  market: { kind: 'updown', symbol: 'btc', asset: 'Bitcoin', interval: '5m' },
-  price: '$104,286.42', change: '+0.38%', upChance: 64, endsIn: '02:41', tone: 'orange',
+const TONES: Record<string, PredictionTone> = {
+  btc: 'orange',
+  eth: 'blue',
+  sol: 'purple',
+  hype: 'purple',
 }
 
-const markets: PredictionMarket[] = [
-  { market: { kind: 'updown', symbol: 'btc', asset: 'Bitcoin', interval: '15m' }, price: '$104,286.42', change: '+0.38%', upChance: 61, endsIn: '12:41', tone: 'orange' },
-  { market: { kind: 'updown', symbol: 'btc', asset: 'Bitcoin', interval: '1h' }, price: '$104,286.42', change: '+0.38%', upChance: 57, endsIn: '42:41', tone: 'orange' },
-  { market: { kind: 'updown', symbol: 'eth', asset: 'Ethereum', interval: '15m' }, price: '$2,516.83', change: '+0.21%', upChance: 53, endsIn: '08:41', tone: 'blue' },
-  { market: { kind: 'updown', symbol: 'sol', asset: 'Solana', interval: '1h' }, price: '$148.26', change: '-0.14%', upChance: 46, endsIn: '35:41', tone: 'purple' },
-  { market: { kind: 'updown', symbol: 'hype', asset: 'Hyperliquid', interval: '15m' }, price: '$25.34', change: '+3.12%', upChance: 54, endsIn: '10:41', tone: 'purple' },
-  { market: { kind: 'steady', symbol: 'btc', asset: 'Bitcoin', year: 2026, month: 9, targets: [60000, 70000, 80000, 90000, 100000] }, price: '$104,286.42', change: '+0.38%', upChance: 70, endsIn: 'Sep 30', tone: 'orange' },
-]
+const TONE_FALLBACK: PredictionTone = 'green'
+
+interface MarketCard {
+  id: string
+  market: PredictionMarket
+}
 
 function marketPath(market: PredictionMarket): string {
   return `/market/${marketId(market.market)}`
+}
+
+function formatPrice(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '—'
+  return `$${value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
+
+function formatChange(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '—'
+  return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`
+}
+
+function formatCountdown(totalSeconds: number): string {
+  const seconds = Math.max(0, Math.floor(totalSeconds))
+  const hours = Math.floor(seconds / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
+  const rest = seconds % 60
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return hours > 0
+    ? `${pad(hours)}:${pad(minutes)}:${pad(rest)}`
+    : `${pad(minutes)}:${pad(rest)}`
+}
+
+/** Countdown / settlement label for a market, preferring the row's `expires_at`. */
+function endsInLabel(row: MarketRow, market: Market, nowSec: number): string {
+  if (row.expires_at) {
+    const expiresAt = Math.floor(new Date(row.expires_at).getTime() / 1000)
+    if (Number.isFinite(expiresAt)) return formatCountdown(expiresAt - nowSec)
+  }
+
+  if (isUpdown(market)) {
+    const interval = UPDOWN_INTERVAL_SECONDS[market.interval]
+    if (market.timestamp != null) {
+      return formatCountdown(market.timestamp + interval - nowSec)
+    }
+    return formatCountdown(interval - (nowSec % interval))
+  }
+
+  if (isSteady(market)) return endOfMonthLabel(market.year, market.month)
+  if (isLive(market)) return 'Live'
+  if (isNotLive(market)) return '—'
+  return '—'
+}
+
+function buildCard(
+  row: MarketRow,
+  quotes: Record<string, HlAssetCtx> | undefined,
+  nowSec: number,
+): MarketCard | null {
+  const market = parseMarketId(row.slug)
+  if (!market) return null
+
+  const coin = hlCoinFor(market.symbol)
+  const quote = coin ? quotes?.[coin] : undefined
+  const startPrice = row.start_price != null ? Number(row.start_price) : null
+  const price = quote?.price ?? (Number.isFinite(startPrice) ? startPrice : null)
+
+  return {
+    id: row.id,
+    market: {
+      market,
+      price: formatPrice(price),
+      change: formatChange(quote?.changePct),
+      upChance: 50,
+      endsIn: endsInLabel(row, market, nowSec),
+      tone: TONES[market.symbol.toLowerCase()] ?? TONE_FALLBACK,
+    },
+  }
 }
 
 export default function HomePage() {
@@ -42,9 +126,26 @@ export default function HomePage() {
   const { address } = useAccount()
   const { mode } = useChainModeStore()
   const [depositOpen, setDepositOpen] = useState(false)
+  const [now, setNow] = useState(() => Math.floor(Date.now() / 1000))
   const { data: balance, isLoading: balanceLoading, error: balanceError } = useUsdcBalance(address)
+  const { data: rows, isPending: marketsLoading, error: marketsError } = useMarkets()
+  const { data: quotes } = useAssetCtxs()
   const factories: DepositFactoryConfig[] = depositFactoriesByMode[mode]
-  console.log(address);
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 1_000)
+    return () => clearInterval(timer)
+  }, [])
+
+  const cards = useMemo(
+    () =>
+      (rows ?? [])
+        .map((row) => buildCard(row, quotes, now))
+        .filter((card): card is MarketCard => card !== null),
+    [rows, quotes, now],
+  )
+
+  const [featured, ...more] = cards
   const predicted = address
     ? factories.map((config) => ({
         config,
@@ -70,25 +171,54 @@ export default function HomePage() {
         </div>
       </div>
 
-      <section className="mt-8">
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <h2 className="text-lg font-semibold text-text-h">Featured market</h2>
-          <span className="text-xs text-text">Short-term · settles soon</span>
-        </div>
-        <PredictionCard market={featuredMarket} featured to={marketPath(featuredMarket)} />
-      </section>
+      {!supabaseConfigured() && (
+        <p className="mt-4 rounded-xl border border-border bg-bg px-4 py-3 text-sm text-text">
+          未配置 Supabase：请在 <code>.env</code> 中设置 <code>VITE_SUPABASE_URL</code> 和{' '}
+          <code>VITE_SUPABASE_ANON_KEY</code> 后刷新页面。
+        </p>
+      )}
 
-      <section className="mt-8">
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <h2 className="text-lg font-semibold text-text-h">More predictions</h2>
-          <span className="text-xs text-text">New markets update regularly</span>
+      {supabaseConfigured() && marketsLoading && (
+        <div className="mt-10 flex justify-center text-accent">
+          <Spinner className="size-6" />
         </div>
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {markets.map((market) => (
-            <PredictionCard key={`${market.market.symbol}-${market.market.kind}`} market={market} to={marketPath(market)} />
-          ))}
-        </div>
-      </section>
+      )}
+
+      {marketsError && (
+        <p className="mt-4 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-500">
+          加载市场失败：{marketsError instanceof Error ? marketsError.message : String(marketsError)}
+        </p>
+      )}
+
+      {supabaseConfigured() && !marketsLoading && !marketsError && cards.length === 0 && (
+        <p className="mt-4 rounded-xl border border-border bg-bg px-4 py-3 text-sm text-text">
+          暂无开放中的市场。
+        </p>
+      )}
+
+      {featured && (
+        <section className="mt-8">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <h2 className="text-lg font-semibold text-text-h">Featured market</h2>
+            <span className="text-xs text-text">Short-term · settles soon</span>
+          </div>
+          <PredictionCard market={featured.market} featured to={marketPath(featured.market)} />
+        </section>
+      )}
+
+      {more.length > 0 && (
+        <section className="mt-8">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <h2 className="text-lg font-semibold text-text-h">More predictions</h2>
+            <span className="text-xs text-text">New markets update regularly</span>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {more.map((card) => (
+              <PredictionCard key={card.id} market={card.market} to={marketPath(card.market)} />
+            ))}
+          </div>
+        </section>
+      )}
 
       {mode === 'testnet' && (
         <section className="mt-8">
@@ -96,28 +226,28 @@ export default function HomePage() {
             <h2 className="text-lg font-semibold text-text-h">Debug (testnet)</h2>
             <span className="text-xs text-text">live vs notlive control</span>
           </div>
-          <PredictionCard
-            market={{
-              market: { kind: 'live', symbol: 'btc', asset: 'Bitcoin' },
-              price: '$104,286.42',
-              change: '+0.38%',
-              upChance: 50,
-              endsIn: 'Live',
-              tone: 'orange',
-            }}
-            to="/market/btc_updown_live"
-          />
-          <div className="mt-3">
+          <div className="grid gap-3 sm:grid-cols-2">
             <PredictionCard
               market={{
-                market: { kind: 'notlive', symbol: 'btc', asset: 'Bitcoin' },
+                market: { kind: 'live', symbol: 'btc', asset: 'Bitcoin', quote: 'USDG' },
+                price: '$104,286.42',
+                change: '+0.38%',
+                upChance: 50,
+                endsIn: 'Live',
+                tone: 'orange',
+              }}
+              to="/market/btc_updownusdg_live"
+            />
+            <PredictionCard
+              market={{
+                market: { kind: 'notlive', symbol: 'btc', asset: 'Bitcoin', quote: 'USDG' },
                 price: '$104,286.42',
                 change: '+0.38%',
                 upChance: 50,
                 endsIn: '—',
                 tone: 'purple',
               }}
-              to="/market/btc_updown_notlive"
+              to="/market/btc_updownusdg_notlive"
             />
           </div>
         </section>

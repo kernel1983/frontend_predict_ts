@@ -1,18 +1,23 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { useAccount } from 'wagmi'
+import type { EIP1193Provider } from 'viem'
+import { useAccount, useSendTransaction } from 'wagmi'
 import { useQuery } from '@tanstack/react-query'
 import { AppLayout } from '@/components/layout/AppLayout'
+import { Button } from '@/components/ui/Button'
 import { PriceSourceSwitch } from '@/components/market/PriceSourceSwitch'
 import { BalancesPanel } from '@/components/market/updown/BalancesPanel'
 import { MarketPanel } from '@/components/market/updown/MarketPanel'
 import { PriceChart } from '@/components/market/updown/PriceChart'
 import { TradePanel } from '@/components/market/updown/TradePanel'
+import { OpenOrdersPanel } from '@/components/market/updown/OpenOrdersPanel'
+import { MintPanel } from '@/components/market/updown/MintPanel'
 import { useCbBtcPrice } from '@/hooks/useCbBtcPrice'
 import { usePredictBalances } from '@/hooks/usePredictBalances'
 import { type CbBtcRecord } from '@/lib/cbbtc'
 import { WINDOW_SEC, emptyPriceState, ingestPrice, type PriceState } from '@/lib/priceCurve'
 import {
+  QUOTE_DECIMALS,
   liveUpdownSlug,
   notLiveSlug,
   type LiveUpdownMarket,
@@ -21,23 +26,32 @@ import {
 import { HyperliquidWS, hlCoinFor } from '@/lib/hyperliquid'
 import {
   ZENTRA_ENVS,
+  fetchPredictBook,
+  fetchPredictMarketMeta,
   fetchPredictMarketProbe,
-  fetchPredictOrderbook,
-  fetchPredictOrderbookRaw,
   isEnvConfigured,
 } from '@/lib/zentra'
 import { useChainModeStore } from '@/store/chainMode'
 import { usePriceSourceStore } from '@/store/priceSource'
 import { cn } from '@/lib/cn'
+import { ensureWalletChain, isUserRejected, toErrorMessage } from '@/lib/wallet'
+import { useToast } from '@/components/ui/toast-context'
+import {
+  ZEN_CONTRACT,
+  buildFreeMintUsdGData,
+  parseUsdcAmount,
+} from '@/lib/zentra'
+
+const RH_TESTNET_CHAIN = {
+  chainId: 46630,
+  chainName: 'Robinhood Chain Testnet',
+  nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+  rpcUrls: ['https://rpc.testnet.chain.robinhood.com'],
+  blockExplorerUrls: ['https://explorer.testnet.chain.robinhood.com'],
+} as const
 
 const fmtPrice = (n: number) =>
   `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-
-/** 解析盘口级：price 18 位小数 → 美元；base 6 位小数数量 → 取绝对值 */
-const parseLevel = (l: { price: string; base: string }) => ({
-  price: Number(l.price) / 1e18,
-  size: Math.abs(Number(l.base)) / 1e6,
-})
 
 /**
  * UpdownTemplate 的 fork：市场没有结束时间（不按轮次结算，slug 恒定）。
@@ -67,6 +81,9 @@ export function LiveUpdownTemplate({
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000))
   const [hlConnected, setHlConnected] = useState(false)
   const [balTick, setBalTick] = useState(0)
+  const [rhSwitching, setRhSwitching] = useState(false)
+  const [rhError, setRhError] = useState<string | null>(null)
+  const [rhMintError, setRhMintError] = useState<string | null>(null)
 
   /** 换源/换 symbol 换掉整个 key，把曲线、Last price 一起清空 */
   const feedKey = `${useBase ? 'base' : 'hl'}:${hlCoin ?? ''}`
@@ -74,7 +91,9 @@ export function LiveUpdownTemplate({
   if (chart.key !== feedKey) setChart(emptyPriceState(feedKey))
   const { price, points } = chart
 
-  const { address } = useAccount()
+  const { address, connector } = useAccount()
+  const { sendTransactionAsync, isPending: mintingUsdG } = useSendTransaction()
+  const toast = useToast()
 
   /** 把一个价格并入曲线（连续，不按分钟重置） */
   const ingest = useCallback(
@@ -105,10 +124,52 @@ export function LiveUpdownTemplate({
     return () => clearInterval(t)
   }, [])
 
-  /**
-   * ws.py 的推送间隔不固定（poll 每 15s，codex-ws 只在池子成交时推），
-   * 所以没新推送的秒沿用上一个价格补点：曲线一直画到当前时间，不再按分钟重置。
-   */
+  /** WS 行情订阅：trades/candle 事件回调里更新价格与秒级点（持续，无轮次） */
+
+  const switchToRhTestnet = async () => {
+    setRhError(null)
+    if (!connector) {
+      setRhError('Connect a wallet first.')
+      return
+    }
+    setRhSwitching(true)
+    try {
+      const provider = (await connector.getProvider()) as EIP1193Provider | undefined
+      if (!provider) throw new Error('Wallet provider is not available.')
+      await ensureWalletChain(provider, RH_TESTNET_CHAIN)
+    } catch (err) {
+      if (!isUserRejected(err)) {
+        setRhError(toErrorMessage(err))
+      }
+    } finally {
+      setRhSwitching(false)
+    }
+  }
+
+  const mintUsdGOnRh = async () => {
+    setRhMintError(null)
+    if (!address || !connector) {
+      setRhMintError('Connect a wallet first.')
+      return
+    }
+    try {
+      const provider = (await connector.getProvider()) as EIP1193Provider | undefined
+      if (!provider) throw new Error('Wallet provider is not available.')
+      const amount = parseUsdcAmount('100') ?? 100_000_000n
+      const hash = await sendTransactionAsync({
+        to: ZEN_CONTRACT,
+        value: 0n,
+        data: buildFreeMintUsdGData(amount),
+      })
+      toast.push({ title: 'Mint USDG (zentra) submitted', variant: 'success' })
+      void hash
+    } catch (err) {
+      if (!isUserRejected(err)) {
+        setRhMintError(toErrorMessage(err))
+      }
+    }
+  }
+
   useEffect(() => {
     if (!useBase) return
     lastBasePrice.current = null
@@ -142,27 +203,26 @@ export function LiveUpdownTemplate({
     }
   }, [hlCoin, useBase, feedKey, ingest])
 
-  // YES/NO 报价（orderbook 实时轮询；无挂单时用启发式占位）
+  const { data: meta } = useQuery({
+    queryKey: ['predict-meta-live', slug],
+    queryFn: () => fetchPredictMarketMeta(slug),
+    enabled: configured,
+    refetchInterval: 30_000,
+  })
+  const quote = meta?.quote ?? 'USDC'
+  const quoteDecimals = meta?.quoteDecimals ?? QUOTE_DECIMALS[quote]
+
+  // YES/NO 完整盘口（best bid/ask + 深度）
   const { data: book } = useQuery({
-    queryKey: ['predict-book-live', slug],
-    queryFn: () => fetchPredictOrderbook(slug),
+    queryKey: ['predict-book-live', slug, quoteDecimals],
+    queryFn: () => fetchPredictBook(slug, quoteDecimals),
     enabled: Boolean(hlCoin) && configured,
     refetchInterval: 2_000,
   })
 
-  // 调试用原始订单簿（含 bestBid / asks / bids 全盘口）
-  const { data: rawBook } = useQuery({
-    queryKey: ['predict-book-raw-live', slug],
-    queryFn: () => fetchPredictOrderbookRaw(slug),
-    enabled: configured,
-    refetchInterval: 2_000,
-  })
-
   // 只用真实盘口报价：某一侧没有挂单（无 bestAsk）时为 null，界面显示 —，不做启发式填充
-  const yesPrice = book?.yes ?? null
-  const noPrice = book?.no ?? null
-  const yesBid = book?.yesBid ?? null
-  const noBid = book?.noBid ?? null
+  const yesPrice = book?.yes.bestAsk ?? null
+  const noPrice = book?.no.bestAsk ?? null
 
   // 调试探测：slug 是否已在链上创建
   const probe = useQuery({
@@ -177,6 +237,7 @@ export function LiveUpdownTemplate({
     slug,
     configured,
     balTick,
+    quote,
   )
 
   return (
@@ -279,7 +340,7 @@ export function LiveUpdownTemplate({
               </p>
               <div className="mt-3 grid grid-cols-2 gap-3">
                 {(['yes', 'no'] as const).map((side) => {
-                  const s = rawBook?.[side]
+                  const s = book?.[side]
                   return (
                     <div key={side} className="rounded-xl border border-border bg-bg p-3">
                       <p
@@ -295,11 +356,15 @@ export function LiveUpdownTemplate({
                       <dl className="mt-2 space-y-1 text-xs">
                         <div className="flex justify-between">
                           <dt className="text-text">bestAsk</dt>
-                          <dd className="font-mono text-text-h">{s?.bestAsk ?? '—'}</dd>
+                          <dd className="font-mono text-text-h">
+                            {s?.bestAsk?.toFixed(4) ?? '—'}
+                          </dd>
                         </div>
                         <div className="flex justify-between">
                           <dt className="text-text">bestBid</dt>
-                          <dd className="font-mono text-text-h">{s?.bestBid ?? '—'}</dd>
+                          <dd className="font-mono text-text-h">
+                            {s?.bestBid?.toFixed(4) ?? '—'}
+                          </dd>
                         </div>
                         <div className="flex justify-between">
                           <dt className="text-text">asks / bids</dt>
@@ -314,16 +379,16 @@ export function LiveUpdownTemplate({
                             .slice(0, 3)
                             .map((l, i) => (
                               <div key={`a${i}`} className="flex justify-between">
-                                <span>ask {parseLevel(l).price.toFixed(2)}</span>
-                                <span>× {parseLevel(l).size.toFixed(2)}</span>
+                                <span>ask {l.price.toFixed(2)}</span>
+                                <span>× {l.size.toFixed(2)}</span>
                               </div>
                             ))}
                           {s.bids
                             .slice(0, 3)
                             .map((l, i) => (
                               <div key={`b${i}`} className="flex justify-between">
-                                <span>bid {parseLevel(l).price.toFixed(2)}</span>
-                                <span>× {parseLevel(l).size.toFixed(2)}</span>
+                                <span>bid {l.price.toFixed(2)}</span>
+                                <span>× {l.size.toFixed(2)}</span>
                               </div>
                             ))}
                         </div>
@@ -488,6 +553,42 @@ export function LiveUpdownTemplate({
                 </p>
               </div>
 
+              {testnet && (
+                <div className="mt-4 rounded-xl border border-border bg-bg p-3">
+                  <p className="text-xs text-text">Network tools</p>
+                  <Button
+                    size="sm"
+                    className="mt-2 w-full"
+                    loading={rhSwitching}
+                    disabled={rhSwitching}
+                    onClick={() => void switchToRhTestnet()}
+                  >
+                    Switch wallet to Robinhood Chain Testnet (46630)
+                  </Button>
+                  <p className="mt-1 text-[11px] text-text">
+                    Adds RPC/explorer if missing and switches to chain 46630.
+                  </p>
+                  {rhError && (
+                    <p className="mt-2 text-xs text-red-500">{rhError}</p>
+                  )}
+                  <Button
+                    size="sm"
+                    className="mt-2 w-full"
+                    loading={mintingUsdG}
+                    disabled={mintingUsdG}
+                    onClick={() => void mintUsdGOnRh()}
+                  >
+                    Mint 100 Mock USDG via zentra
+                  </Button>
+                  <p className="mt-1 text-[11px] text-text">
+                    Sends token_mint_free to {ZEN_CONTRACT} on current network.
+                  </p>
+                  {rhMintError && (
+                    <p className="mt-2 text-xs text-red-500">{rhMintError}</p>
+                  )}
+                </div>
+              )}
+
               {probe.data?.details && (
                 <pre className="mt-3 max-h-48 overflow-auto whitespace-pre-wrap rounded-xl border border-border bg-bg p-3 font-mono text-[11px] leading-relaxed text-text">
                   {probe.data.details}
@@ -504,15 +605,39 @@ export function LiveUpdownTemplate({
           {testnet && (
             <TradePanel
               slug={slug}
-              usdcRaw={balances.usdcRaw}
+              quote={quote}
+              quoteDecimals={quoteDecimals}
+              quoteRaw={balances.quoteRaw}
               yesRaw={balances.yesRaw}
               noRaw={balances.noRaw}
-              upAsk={yesPrice}
-              downAsk={noPrice}
-              upBid={yesBid}
-              downBid={noBid}
+              book={book ?? null}
+              marketExists={meta ? meta.exists : null}
               enabled={Boolean(hlCoin)}
               onTraded={() => setBalTick((t) => t + 1)}
+            />
+          )}
+
+          {testnet && (
+            <MintPanel
+              slug={slug}
+              quote={quote}
+              quoteDecimals={quoteDecimals}
+              quoteRaw={balances.quoteRaw}
+              book={book ?? null}
+              marketExists={meta ? meta.exists : null}
+              enabled={Boolean(hlCoin)}
+              onChanged={() => setBalTick((t) => t + 1)}
+            />
+          )}
+
+          {testnet && (
+            <OpenOrdersPanel
+              address={address?.toLowerCase()}
+              slug={slug}
+              refreshKey={balTick}
+              onChanged={() => setBalTick((t) => t + 1)}
+              quote={quote}
+              quoteDecimals={quoteDecimals}
             />
           )}
 
@@ -521,6 +646,8 @@ export function LiveUpdownTemplate({
             slug={slug}
             enabled={configured}
             refreshKey={balTick}
+            quote={quote}
+            quoteDecimals={quoteDecimals}
           />
         </aside>
       </div>

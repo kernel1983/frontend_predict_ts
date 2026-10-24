@@ -3,6 +3,17 @@ import {
   useChainModeStore,
   type ChainMode,
 } from '@/store/chainMode'
+import { formatAmount, parseAmount } from '@/lib/amounts'
+import {
+  QUOTE_DECIMALS,
+  isQuoteToken,
+  type QuoteToken,
+} from '@/lib/market'
+import {
+  normalizePredictBook,
+  type PredictBook,
+  type RawPredictBook,
+} from '@/lib/orderBook'
 
 export const USDC_DECIMALS = 6
 
@@ -45,10 +56,10 @@ export function isEnvConfigured(env: ZentraEnv): boolean {
 }
 
 /**
- * 查询 indexer 上某前缀的状态 value（原始值），未配置/出错抛错。
- * 返回字符串以保留大整数精度。
+ * 查询 indexer 上某前缀的原始状态值；不存在返回 null，网络/解析错误抛错。
+ * 不展开数组，因为 predict 的订单状态本身就是数组。
  */
-export async function fetchRawState(prefix: string): Promise<string> {
+export async function fetchStateValue(prefix: string): Promise<unknown> {
   const env = ZENTRA_ENVS[useChainModeStore.getState().mode]
   if (!isEnvConfigured(env)) {
     throw new Error(`${env.withdrawChainName} is not configured yet.`)
@@ -62,10 +73,25 @@ export async function fetchRawState(prefix: string): Promise<string> {
   const data = JSON.parse(text, (_key, value) =>
     typeof value === 'number' && !Number.isSafeInteger(value) ? BigInt(value) : value,
   ) as { result?: unknown }
-  let val = data?.result ?? null
+  return data?.result ?? null
+}
+
+/**
+ * 查询 indexer 上某前缀的标量状态；不存在返回 null，网络/解析错误抛错。
+ */
+export async function fetchStateMaybe(prefix: string): Promise<string | null> {
+  let val = await fetchStateValue(prefix)
   if (Array.isArray(val)) val = val[0] ?? null
-  if (val === null || val === undefined) return '0'
+  if (val === null || val === undefined || val === '') return null
   return String(val)
+}
+
+/**
+ * 查询 indexer 上某前缀的状态 value（原始值），未配置/出错抛错。
+ * 返回字符串以保留大整数精度；不存在返回 '0'。
+ */
+export async function fetchRawState(prefix: string): Promise<string> {
+  return (await fetchStateMaybe(prefix)) ?? '0'
 }
 
 export interface PredictMarketProbe {
@@ -151,9 +177,63 @@ function toErrorMessageSafe(err: unknown): string {
   return String(err)
 }
 
+function parseQuoteToken(raw: string | null): QuoteToken | null {
+  if (raw === null) return null
+  const value = raw.trim().replace(/^["']|["']$/g, '').toUpperCase()
+  if (value === '' || value === '0' || value === 'NULL' || value === '[]') return null
+  return isQuoteToken(value) ? value : null
+}
+
+/** 老市场没有 quote_token 状态时按 slug 推断 */
+export function quoteForSlug(slug: string): QuoteToken {
+  return slug.includes('_updownusdg_') ? 'USDG' : 'USDC'
+}
+
+export interface PredictMarketMeta {
+  slug: string
+  quote: QuoteToken
+  quoteDecimals: number
+  /** quote_token 状态存在即视为已创建 */
+  exists: boolean
+  quoteRaw: string | null
+}
+
+/** 查询市场报价币种与精度；市场未创建时 exists=false，quote 按 slug 推断 */
+export async function fetchPredictMarketMeta(slug: string): Promise<PredictMarketMeta> {
+  const quoteRaw = await fetchStateMaybe(`base-predict-${slug}_quote_token`)
+  const parsed = parseQuoteToken(quoteRaw)
+  const quote = parsed ?? quoteForSlug(slug)
+  let quoteDecimals = QUOTE_DECIMALS[quote]
+
+  if (parsed !== null) {
+    try {
+      const decimalsRaw = await fetchStateMaybe(`base-${quote}-decimal`)
+      const decimals = Number(decimalsRaw)
+      if (Number.isInteger(decimals) && decimals >= 0 && decimals <= 18) {
+        quoteDecimals = decimals
+      }
+    } catch {
+      // 精度状态缺失时用币种默认值
+    }
+  }
+
+  return {
+    slug,
+    quote,
+    quoteDecimals,
+    exists: parsed !== null,
+    quoteRaw,
+  }
+}
+
 /** 查询 indexer 上某地址的 USDC 余额（rollup 内部状态） */
 export async function fetchUsdcBalance(address: Address): Promise<bigint> {
   return BigInt(await fetchRawState(`base-USDC-balance:${address.toLowerCase()}`))
+}
+
+/** 查询 indexer 上某地址的 USDG 余额（rollup 内部状态） */
+export async function fetchUsdgBalance(address: Address): Promise<bigint> {
+  return BigInt(await fetchRawState(`base-USDG-balance:${address.toLowerCase()}`))
 }
 
 export interface PredictOrderbook {
@@ -165,7 +245,7 @@ export interface PredictOrderbook {
   noBid: number | null
 }
 
-/** indexer 原始盘口一级：price 为 18 位小数单价（wei 风格），base 为 6 位小数数量（ask 负/bid 正），quote 为 6 位小数金额 */
+/** indexer 原始盘口一级：price 按 quote 精度缩放（6 位），base 为份额、quote 为金额 */
 export interface PredictOrderbookLevel {
   id?: number
   owner?: string
@@ -211,18 +291,30 @@ export async function fetchPredictOrderbookRaw(slug: string): Promise<PredictOrd
   }
 }
 
-/** 查询 indexer 上某个 updown slug 的 YES/NO bestAsk（买入价）与 bestBid（卖出价），美元 */
-export async function fetchPredictOrderbook(slug: string): Promise<PredictOrderbook> {
+/**
+ * 从原始盘口归一化出完整深度。
+ * bestAsk/bestBid 由本地按 price 重算，避免公开 indexer 用 1e18 缩放 6 位报价的问题。
+ */
+export async function fetchPredictBook(
+  slug: string,
+  quoteDecimals = USDC_DECIMALS,
+): Promise<PredictBook | null> {
   const raw = await fetchPredictOrderbookRaw(slug)
-  const px = (v: string | null | undefined) => {
-    const n = Number(v)
-    return Number.isFinite(n) && n > 0 ? n : null
-  }
+  if (!raw) return null
+  return normalizePredictBook(raw as RawPredictBook, quoteDecimals)
+}
+
+/** 查询 indexer 上某个 updown slug 的 YES/NO bestAsk（买入价）与 bestBid（卖出价），美元 */
+export async function fetchPredictOrderbook(
+  slug: string,
+  quoteDecimals = USDC_DECIMALS,
+): Promise<PredictOrderbook> {
+  const book = await fetchPredictBook(slug, quoteDecimals)
   return {
-    yes: raw ? px(raw.yes.bestAsk) : null,
-    no: raw ? px(raw.no.bestAsk) : null,
-    yesBid: raw ? px(raw.yes.bestBid) : null,
-    noBid: raw ? px(raw.no.bestBid) : null,
+    yes: book?.yes.bestAsk ?? null,
+    no: book?.no.bestAsk ?? null,
+    yesBid: book?.yes.bestBid ?? null,
+    noBid: book?.no.bestBid ?? null,
   }
 }
 
@@ -231,24 +323,116 @@ export function buildZenCallData(fn: string, args: unknown[]): Hex {
   return toHex(JSON.stringify({ p: 'zentest3', f: fn, a: args }))
 }
 
+export interface PredictOpenOrder {
+  token: 'yes' | 'no'
+  side: 'buy' | 'sell'
+  id: number
+  owner: string
+  /** 剩余份额（绝对值，6 位小数） */
+  baseRaw: bigint
+  /** 剩余报价金额（绝对值，quote 精度） */
+  quoteRaw: bigint
+  priceRaw: bigint
+  /** 每份价格（quote 单位） */
+  price: number
+}
+
+function asBigInt(value: unknown): bigint {
+  if (typeof value === 'bigint') return value
+  if (typeof value === 'number') return BigInt(Math.trunc(value))
+  if (typeof value === 'string' && value.trim() !== '') {
+    try {
+      return BigInt(value)
+    } catch {
+      return 0n
+    }
+  }
+  return 0n
+}
+
+function asOrderId(value: unknown): number | null {
+  const raw = Array.isArray(value) ? value[0] : value
+  const id = Number(raw)
+  return Number.isInteger(id) && id > 0 ? id : null
+}
+
+/** 遍历 indexer 上某市场某侧订单链表，返回指定地址的在场限价单 */
+export async function fetchPredictOpenOrders(
+  slug: string,
+  owner: string,
+  quoteDecimals = USDC_DECIMALS,
+): Promise<PredictOpenOrder[]> {
+  const ownerLc = owner.toLowerCase()
+  const scale = 10 ** quoteDecimals
+  const out: PredictOpenOrder[] = []
+
+  for (const token of ['yes', 'no'] as const) {
+    for (const side of ['buy', 'sell'] as const) {
+      const prefix = `base-predict-${slug}_${token}_${side}`
+      let oid = asOrderId(await fetchStateValue(`${prefix}_start`))
+      const seen = new Set<number>()
+
+      while (oid !== null && !seen.has(oid) && out.length < 500) {
+        seen.add(oid)
+        const raw = await fetchStateValue(`${prefix}:${oid}`)
+        if (!Array.isArray(raw) || raw.length < 6) break
+
+        const addr = String(raw[0] ?? '').toLowerCase()
+        const baseRaw = asBigInt(raw[1])
+        const quoteRaw = asBigInt(raw[2])
+        const priceRaw = asBigInt(raw[3])
+        if (addr === ownerLc && baseRaw !== 0n && priceRaw > 0n) {
+          out.push({
+            token,
+            side,
+            id: oid,
+            owner: addr,
+            baseRaw: baseRaw < 0n ? -baseRaw : baseRaw,
+            quoteRaw: quoteRaw < 0n ? -quoteRaw : quoteRaw,
+            priceRaw,
+            price: Number(priceRaw) / scale,
+          })
+        }
+        oid = asOrderId(raw[5])
+      }
+    }
+  }
+
+  return out
+}
+
+/** 铸造 YES/NO：[slug, quote_amount]，1 quote 生成 1 YES + 1 NO */
+export function buildPredictMintData(slug: string, quoteAmountRaw: bigint): Hex {
+  return buildZenCallData('predict_mint', [slug, quoteAmountRaw.toString()])
+}
+
+/** 撤销限价单：[slug, yes|no, buy|sell, order_id] */
+export function buildLimitOrderCancelData(
+  slug: string,
+  token: 'yes' | 'no',
+  side: 'buy' | 'sell',
+  orderId: number,
+): Hex {
+  return buildZenCallData('predict_limit_order_cancel', [slug, token, side, orderId])
+}
+
 /** 提现：桥接 USDC 到 base（burn rollup 余额，operator 在 L1 出金） */
 export function buildBridgeOutgoingData(amount: bigint): Hex {
   return buildZenCallData('bridge_outgoing', ['USDC', amount.toString(), 'base'])
 }
 
-/** 免费铸造测试币：向 indexer 申请 amount 单位的模拟 USDC（仅 testnet） */
-export function buildFreeMintData(amount: bigint): Hex {
-  return buildZenCallData('token_mint_free', ['USDC', amount.toString()])
+/** 免费铸造测试币：向 indexer 申请 amount 单位的模拟 USDC/USDG（仅 testnet） */
+export function buildFreeMintData(amount: bigint, token = 'USDC'): Hex {
+  return buildZenCallData('token_mint_free', [token, amount.toString()])
+}
+
+export function buildFreeMintUsdGData(amount: bigint): Hex {
+  return buildFreeMintData(amount, 'USDG')
 }
 
 /** 将用户输入的十进制字符串解析为 6 位小数的原始整数，非法返回 null */
 function parseDecimal6(input: string): bigint | null {
-  const m = input.trim().match(/^(\d+)(?:\.(\d*))?$/)
-  if (!m) return null
-  let frac = (m[2] ?? '').slice(0, USDC_DECIMALS)
-  frac = frac.padEnd(USDC_DECIMALS, '0')
-  const whole = BigInt(m[1] || '0')
-  return whole * 10n ** BigInt(USDC_DECIMALS) + (frac ? BigInt(frac) : 0n)
+  return parseAmount(input, USDC_DECIMALS)
 }
 
 /** 将用户输入的 USDC 金额（字符串）解析为原始整数（6 位小数），非法返回 null */
@@ -261,160 +445,7 @@ export function parseShareAmount(input: string): bigint | null {
   return parseDecimal6(input)
 }
 
-/** 卖出单位：usdc = 输入想拿到的 USDC 金额；shares = 输入想卖出的份额 */
-export type SellUnit = 'usdc' | 'shares'
-
-/**
- * 美元单价 → 6 位定点整数。
- * 份额与 USDC 换算全走整数，避免 0.46 这类单价带来浮点误差。
- */
-export function parsePriceMicros(price: number): bigint {
-  return BigInt(Math.round(price * 10 ** USDC_DECIMALS))
-}
-
-/** predict_market_order 的实际入参：市价单只走 quote 腿，base 恒为 null */
-export type MarketOrderArgs = [string, null, 'yes' | 'no', string]
-
-export interface MarketOrderPreview {
-  /** 真正会发上链的四个参数，null 表示当前输入不合法 */
-  args: MarketOrderArgs | null
-  error: string | null
-  /** 当前输入下的金额上限（买入为 USDC 余额，卖出为按买一价可换回的 USDC） */
-  maxUsdc: bigint | null
-  /** 预计拿到的 USDC */
-  estUsdc: string
-  /** 预计卖出的份额 */
-  estShares: string
-}
-
-const ONE = 10n ** BigInt(USDC_DECIMALS)
-
-/**
- * 依据「买/卖 + 卖出单位」推导出市价单入参与预估，并做余额上限校验。
- *
- * 市价单只认 quote 腿：买为负（付 USDC），卖为正（收 USDC）。
- * 与 backend/testnet_rpc_market_order.py 一致，卖出无法直接用份额表达，
- * 因此 shares 单位会按当前 bestBid 换算成 USDC 金额（向下取整，
- * 保证盘口不变时卖出的份额不会多于用户输入）。
- */
-export function previewMarketOrder({
-  slug,
-  side,
-  buy,
-  sellUnit,
-  amount,
-  bestAsk,
-  bestBid,
-  usdc,
-  holding,
-  tokenLabel,
-}: {
-  slug: string
-  side: 'yes' | 'no'
-  buy: boolean
-  sellUnit: SellUnit
-  amount: string
-  bestAsk: number | null
-  bestBid: number | null
-  usdc: bigint
-  holding: bigint
-  tokenLabel: string
-}): MarketOrderPreview {
-  const none: MarketOrderPreview = {
-    args: null,
-    error: null,
-    maxUsdc: null,
-    estUsdc: '—',
-    estShares: '—',
-  }
-  if (buy) {
-    const raw = parseUsdcAmount(amount)
-    if (raw === null || raw <= 0n) {
-      return { ...none, error: 'Enter a valid amount.' }
-    }
-    if (raw > usdc) {
-      return { ...none, error: 'Amount exceeds your available USDC balance.' }
-    }
-    return {
-      args: [slug, null, side, `-${raw}`],
-      error: null,
-      maxUsdc: usdc,
-      estUsdc: formatUsdc(raw, 2),
-      estShares:
-        bestAsk === null
-          ? '—'
-          : formatUsdc((raw * ONE) / parsePriceMicros(bestAsk), 2),
-    }
-  }
-
-  if (holding <= 0n) {
-    return { ...none, error: `You have no ${tokenLabel} to sell.` }
-  }
-  if (bestBid === null) {
-    return { ...none, error: 'No best bid to price this sell against.' }
-  }
-  const bid = parsePriceMicros(bestBid)
-  const bidText = formatUsdc(bid, 2)
-  // 手上份额按当前买一价最多能换回多少 USDC
-  const maxProceeds = (holding * bid) / ONE
-
-  if (sellUnit === 'usdc') {
-    const raw = parseUsdcAmount(amount)
-    if (raw === null || raw <= 0n) {
-      return { ...none, maxUsdc: maxProceeds, error: 'Enter a valid amount.' }
-    }
-    if (raw > maxProceeds) {
-      return {
-        ...none,
-        maxUsdc: maxProceeds,
-        error: `Amount exceeds what your ${formatUsdc(holding, 2)} ${tokenLabel} can fetch at ${bidText} (max ${formatUsdc(maxProceeds, 2)}).`,
-      }
-    }
-    return {
-      args: [slug, null, side, `+${raw}`],
-      error: null,
-      maxUsdc: maxProceeds,
-      estUsdc: formatUsdc(raw, 2),
-      estShares: formatUsdc((raw * ONE) / bid, 2),
-    }
-  }
-
-  const raw = parseShareAmount(amount)
-  if (raw === null || raw <= 0n) {
-    return { ...none, maxUsdc: maxProceeds, error: 'Enter a valid share amount.' }
-  }
-  if (raw > holding) {
-    return {
-      ...none,
-      maxUsdc: maxProceeds,
-      error: `Amount exceeds your ${tokenLabel} balance.`,
-    }
-  }
-  const quote = (raw * bid) / ONE
-  if (quote <= 0n) {
-    return { ...none, maxUsdc: maxProceeds, error: 'Amount is too small to sell.' }
-  }
-  return {
-    args: [slug, null, side, `+${quote}`],
-    error: null,
-    maxUsdc: maxProceeds,
-    estUsdc: formatUsdc(quote, 2),
-    estShares: formatUsdc(raw, 2),
-  }
-}
-
 /** 格式化原始 USDC 余额为可读文本，fractionDigits 控制小数位数 */
 export function formatUsdc(raw: bigint, fractionDigits = USDC_DECIMALS): string {
-  const decimals = USDC_DECIMALS
-  const sign = raw < 0n ? '-' : ''
-  const abs = (raw < 0n ? -raw : raw).toString().padStart(decimals + 1, '0')
-  const whole = abs.slice(0, -decimals)
-  let frac = abs.slice(-decimals)
-  if (fractionDigits >= decimals) {
-    frac = frac.replace(/0+$/, '')
-  } else {
-    frac = frac.slice(0, fractionDigits).replace(/0+$/, '')
-  }
-  const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
-  return frac ? `${sign}${grouped}.${frac}` : sign + grouped
+  return formatAmount(raw, USDC_DECIMALS, fractionDigits)
 }

@@ -1,0 +1,215 @@
+import { useState } from 'react'
+import type { EIP1193Provider } from 'viem'
+import {
+  useAccount,
+  useChains,
+  useSendTransaction,
+  useWaitForTransactionReceipt,
+} from 'wagmi'
+import { Button } from '@/components/ui/Button'
+import { useToast } from '@/components/ui/toast-context'
+import { ensureWalletChain, isUserRejected, toErrorMessage } from '@/lib/wallet'
+import {
+  ZEN_CONTRACT,
+  ZENTRA_ENVS,
+  buildFreeMintData,
+  buildFreeMintUsdGData,
+  isEnvConfigured,
+  parseUsdcAmount,
+} from '@/lib/zentra'
+import { useChainModeStore } from '@/store/chainMode'
+
+const MINT_AMOUNT = '100'
+
+export function ClaimCard({
+  address,
+  onMinted,
+}: {
+  address: string | undefined
+  onMinted: () => void
+}) {
+  const mode = useChainModeStore((s) => s.mode)
+  const env = ZENTRA_ENVS[mode]
+  const configured = isEnvConfigured(env)
+  const toast = useToast()
+
+  const { connector } = useAccount()
+  const chains = useChains()
+  const { sendTransactionAsync, isPending: submitting } = useSendTransaction()
+  const [formError, setFormError] = useState<string | null>(null)
+  const [txHash, setTxHash] = useState<`0x${string}` | undefined>()
+  const [token, setToken] = useState<'USDC' | 'USDG'>('USDG')
+
+  const { data: receipt } = useWaitForTransactionReceipt({
+    hash: txHash,
+    confirmations: 1,
+  })
+
+  const ensureTargetChain = async () => {
+    if (!connector) throw new Error('Connect a wallet to claim.')
+    const provider = (await connector.getProvider()) as
+      | EIP1193Provider
+      | undefined
+    if (!provider) throw new Error('Wallet provider is not available.')
+    const chain = chains.find((item) => item.id === env.withdrawChainId)
+    await ensureWalletChain(provider, {
+      chainId: env.withdrawChainId,
+      chainName: chain?.name ?? env.withdrawChainName,
+      nativeCurrency: chain?.nativeCurrency ?? {
+        name: 'Ether',
+        symbol: 'ETH',
+        decimals: 18,
+      },
+      rpcUrls: chain?.rpcUrls.default.http ?? [],
+      blockExplorerUrls: chain?.blockExplorers?.default
+        ? [chain.blockExplorers.default.url]
+        : undefined,
+    })
+  }
+
+  const handleMint = async () => {
+    setFormError(null)
+    if (!address || !configured || !env.mintEnabled) return
+    try {
+      await ensureTargetChain()
+      const amount = parseUsdcAmount(MINT_AMOUNT) ?? 0n
+      const data = token === 'USDG' ? buildFreeMintUsdGData(amount) : buildFreeMintData(amount, 'USDC')
+      const hash = await sendTransactionAsync({
+        chainId: env.withdrawChainId,
+        account: address as `0x${string}`,
+        to: ZEN_CONTRACT,
+        value: 0n,
+        data,
+      })
+      setTxHash(hash)
+      toast.push({ title: `Claim ${token} submitted`, variant: 'success' })
+    } catch (err) {
+      if (!isUserRejected(err)) {
+        setFormError(toErrorMessage(err))
+      }
+    }
+  }
+
+  const handleReset = () => {
+    setTxHash(undefined)
+    onMinted()
+    window.setTimeout(onMinted, 10_000)
+  }
+
+  return (
+    <div className="rounded-2xl border border-border bg-bg p-5 shadow-card">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-base font-semibold text-text-h">Claim Test Tokens</h2>
+        <span className="rounded-full bg-accent-bg px-2.5 py-0.5 text-xs font-medium text-accent">
+          {env.withdrawChainName}
+        </span>
+      </div>
+      <p className="mt-1 text-xs text-text">
+        Mint {MINT_AMOUNT} Mock {token} from the indexer for testing. The
+        transaction is always sent to {env.withdrawChainName}.
+      </p>
+
+      <div className="mt-3 flex gap-1 rounded-lg border border-border bg-bg p-0.5">
+        {(['USDG', 'USDC'] as const).map((t) => (
+          <button
+            key={t}
+            type="button"
+            onClick={() => {
+              if (t === token) return
+              setToken(t)
+              setTxHash(undefined)
+              setFormError(null)
+            }}
+            className={`flex-1 rounded-md px-2 py-1.5 text-xs font-semibold transition-colors ${
+              token === t ? 'bg-accent/10 text-accent' : 'text-text hover:text-text-h'
+            }`}
+          >
+            {t}
+          </button>
+        ))}
+      </div>
+
+      {!configured && (
+        <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-400">
+          {env.withdrawChainName} is not configured yet.
+        </div>
+      )}
+
+      {formError && (
+        <div className="mt-3 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-500">
+          {formError}
+        </div>
+      )}
+
+      {txHash && !receipt && (
+        <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-400">
+          Transaction submitted:{' '}
+          <a
+            href={`${env.explorerBase}/tx/${txHash}`}
+            target="_blank"
+            rel="noreferrer"
+            className="font-mono underline"
+          >
+            {txHash.slice(0, 12)}…
+          </a>{' '}
+          Waiting for confirmation…
+        </div>
+      )}
+      {receipt && (
+        <div className="mt-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-emerald-600 dark:text-emerald-400">
+          Mint confirmed. {MINT_AMOUNT} Mock {token} should appear shortly.{' '}
+          <a
+            href={`${env.explorerBase}/tx/${txHash}`}
+            target="_blank"
+            rel="noreferrer"
+            className="font-mono underline"
+          >
+            {txHash?.slice(0, 12)}…
+          </a>
+        </div>
+      )}
+
+      <Button
+        size="lg"
+        className="mt-4 w-full"
+        loading={submitting}
+        disabled={!configured || !address || !env.mintEnabled || !!receipt}
+        onClick={() => {
+          void handleMint()
+        }}
+      >
+        {receipt
+          ? 'Claimed'
+          : submitting
+            ? 'Confirming…'
+            : `Claim ${MINT_AMOUNT} Mock ${token}`}
+      </Button>
+
+      {!address && configured && (
+        <p className="mt-3 text-xs text-text">Connect a wallet to claim.</p>
+      )}
+
+      {receipt && (
+        <button
+          type="button"
+          onClick={handleReset}
+          className="mt-3 block w-full text-center text-sm text-accent hover:underline"
+        >
+          Claim again / refresh balance
+        </button>
+      )}
+
+      <div className="mt-4 border-t border-border pt-3">
+        <p className="text-xs text-text">No test ETH for gas?</p>
+        <a
+          href="https://www.alchemy.com/faucets/base-sepolia"
+          target="_blank"
+          rel="noreferrer"
+          className="mt-1 inline-block text-xs text-accent underline"
+        >
+          Claim Base Sepolia ETH
+        </a>
+      </div>
+    </div>
+  )
+}

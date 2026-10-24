@@ -8,9 +8,12 @@ import { BalancesPanel } from '@/components/market/updown/BalancesPanel'
 import { PriceChart, type PricePoint } from '@/components/market/updown/PriceChart'
 import { RoundBar } from '@/components/market/updown/RoundBar'
 import { TradePanel } from '@/components/market/updown/TradePanel'
+import { OpenOrdersPanel } from '@/components/market/updown/OpenOrdersPanel'
+import { MintPanel } from '@/components/market/updown/MintPanel'
 import { useHyperliquidPrice } from '@/hooks/useHyperliquidPrice'
 import { usePredictBalances } from '@/hooks/usePredictBalances'
 import {
+  QUOTE_DECIMALS,
   UPDOWN_INTERVAL_LABEL,
   UPDOWN_INTERVAL_SECONDS,
   marketId,
@@ -21,8 +24,12 @@ import {
 import { formatRange } from '@/lib/marketTime'
 import { describeRound } from '@/lib/round'
 import { fetchCandleSnapshot, hlCoinFor } from '@/lib/hyperliquid'
-import { fetchPredictOrderbook } from '@/lib/zentra'
-import { isEnvConfigured, ZENTRA_ENVS } from '@/lib/zentra'
+import {
+  fetchPredictBook,
+  fetchPredictMarketMeta,
+  isEnvConfigured,
+  ZENTRA_ENVS,
+} from '@/lib/zentra'
 import { useChainModeStore } from '@/store/chainMode'
 import { cn } from '@/lib/cn'
 
@@ -120,21 +127,35 @@ export function UpdownTemplate({ market }: { market: UpdownMarket }) {
     })
   }, [livePrice, isCurrent])
 
-  // YES/NO 报价
+  // 市场报价币种 / 是否已创建
+  const { data: meta } = useQuery({
+    queryKey: ['predict-meta', slug],
+    queryFn: () => fetchPredictMarketMeta(slug),
+    enabled: isCurrent && configured,
+    refetchInterval: 30_000,
+  })
+  const quote = meta?.quote ?? market.quote
+  const quoteDecimals = meta?.quoteDecimals ?? QUOTE_DECIMALS[quote]
+
+  // YES/NO 完整盘口（best bid/ask + 深度）
   const { data: book } = useQuery({
-    queryKey: ['predict-book', slug],
-    queryFn: () => fetchPredictOrderbook(slug),
+    queryKey: ['predict-book', slug, quoteDecimals],
+    queryFn: () => fetchPredictBook(slug, quoteDecimals),
     enabled: Boolean(hlCoin) && isCurrent && configured,
     refetchInterval: 2_000,
   })
 
   // 只用真实盘口报价：某一侧没有挂单（无 bestAsk）时为 null，界面显示 —
-  const yesPrice = book?.yes ?? null
-  const noPrice = book?.no ?? null
-  const yesBid = book?.yesBid ?? null
-  const noBid = book?.noBid ?? null
+  const yesPrice = book?.yes.bestAsk ?? null
+  const noPrice = book?.no.bestAsk ?? null
 
-  const balances = usePredictBalances(address?.toLowerCase(), slug, isCurrent && configured, balTick)
+  const balances = usePredictBalances(
+    address?.toLowerCase(),
+    slug,
+    isCurrent && configured,
+    balTick,
+    quote,
+  )
   const lastPrice = isCurrent ? livePrice : finalPrice
 
   const nav = (timestamp: number) => {
@@ -221,21 +242,41 @@ export function UpdownTemplate({ market }: { market: UpdownMarket }) {
         <aside className="space-y-6">
           <TradePanel
             slug={slug}
-            usdcRaw={balances.usdcRaw}
+            quote={quote}
+            quoteDecimals={quoteDecimals}
+            quoteRaw={balances.quoteRaw}
             yesRaw={balances.yesRaw}
             noRaw={balances.noRaw}
-            upAsk={yesPrice}
-            downAsk={noPrice}
-            upBid={yesBid}
-            downBid={noBid}
+            book={book ?? null}
+            marketExists={meta ? meta.exists : null}
             enabled={isCurrent && Boolean(hlCoin)}
             onTraded={() => setBalTick((t) => t + 1)}
+          />
+          <MintPanel
+            slug={slug}
+            quote={quote}
+            quoteDecimals={quoteDecimals}
+            quoteRaw={balances.quoteRaw}
+            book={book ?? null}
+            marketExists={meta ? meta.exists : null}
+            enabled={isCurrent && Boolean(hlCoin)}
+            onChanged={() => setBalTick((t) => t + 1)}
+          />
+          <OpenOrdersPanel
+            address={address?.toLowerCase()}
+            slug={slug}
+            refreshKey={balTick}
+            onChanged={() => setBalTick((t) => t + 1)}
+            quote={quote}
+            quoteDecimals={quoteDecimals}
           />
           <BalancesPanel
             address={address?.toLowerCase()}
             slug={slug}
             enabled={isCurrent && configured}
             refreshKey={balTick}
+            quote={quote}
+            quoteDecimals={quoteDecimals}
           />
         </aside>
       </div>

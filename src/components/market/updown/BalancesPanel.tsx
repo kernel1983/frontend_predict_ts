@@ -1,22 +1,29 @@
-import { formatUsdc } from '@/lib/zentra'
+import { formatAmount } from '@/lib/amounts'
 import { usePredictBalances } from '@/hooks/usePredictBalances'
+import { QUOTE_DECIMALS, type QuoteToken } from '@/lib/market'
 
 export function BalancesPanel({
   address,
   slug,
   enabled,
   refreshKey,
+  quote = 'USDC',
+  quoteDecimals,
 }: {
   address: string | undefined
   slug: string
   enabled: boolean
   refreshKey: number
+  quote?: QuoteToken
+  quoteDecimals?: number
 }) {
-  const balances = usePredictBalances(address, slug, enabled, refreshKey)
-  const fmt = (raw: string) => formatUsdc(BigInt(raw || '0'), 2)
+  const decimals = quoteDecimals ?? QUOTE_DECIMALS[quote]
+  const balances = usePredictBalances(address, slug, enabled, refreshKey, quote)
+  const fmt = (raw: string) =>
+    formatAmount(BigInt(raw || '0'), decimals, Math.min(decimals, 2))
 
   const rows = [
-    { label: 'USDC', value: fmt(balances.usdcRaw) },
+    { label: quote, value: fmt(balances.quoteRaw) },
     { label: 'YES', value: fmt(balances.yesRaw) },
     { label: 'NO', value: fmt(balances.noRaw) },
   ]

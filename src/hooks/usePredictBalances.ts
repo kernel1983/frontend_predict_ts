@@ -1,26 +1,28 @@
 import { useQuery } from '@tanstack/react-query'
 import { fetchRawState } from '@/lib/zentra'
+import type { QuoteToken } from '@/lib/market'
 
 export interface PredictBalances {
-  usdcRaw: string
+  quoteRaw: string
   yesRaw: string
   noRaw: string
   loading: boolean
 }
 
-/** 轮询 UpDown 三份余额：USDC / YES / NO（indexer 原始字符串） */
+/** 轮询 UpDown 三份余额：报价币 / YES / NO（indexer 原始字符串） */
 export function usePredictBalances(
   address: string | undefined,
   slug: string,
   enabled: boolean,
   refreshKey: number,
+  quoteToken: QuoteToken = 'USDC',
 ): PredictBalances {
   const addr = address?.toLowerCase() ?? ''
   const fetchOne = (prefix: string) => (addr ? fetchRawState(prefix) : '0')
 
-  const usdc = useQuery({
-    queryKey: ['predict-balances', 'usdc', addr, refreshKey],
-    queryFn: () => fetchOne(`base-USDC-balance:${addr}`),
+  const quote = useQuery({
+    queryKey: ['predict-balances', 'quote', quoteToken, addr, refreshKey],
+    queryFn: () => fetchOne(`base-${quoteToken}-balance:${addr}`),
     enabled: Boolean(addr) && enabled,
     refetchInterval: 5_000,
   })
@@ -38,9 +40,12 @@ export function usePredictBalances(
   })
 
   return {
-    usdcRaw: usdc.data ?? '0',
+    quoteRaw: quote.data ?? '0',
     yesRaw: yes.data ?? '0',
     noRaw: no.data ?? '0',
-    loading: Boolean(addr) && enabled && (usdc.isLoading || yes.isLoading || no.isLoading),
+    loading:
+      Boolean(addr) &&
+      enabled &&
+      (quote.isLoading || yes.isLoading || no.isLoading),
   }
 }

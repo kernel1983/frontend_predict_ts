@@ -51,6 +51,44 @@ export async function fetchCandleSnapshot(
     .filter((c) => Number.isFinite(c.t) && Number.isFinite(c.o) && Number.isFinite(c.c))
 }
 
+export interface HlAssetCtx {
+  price: number
+  /** 24h change in percent, relative to `prevDayPx`. */
+  changePct: number
+}
+
+/** One-shot quote snapshot for every Hyperliquid perp (used by the market list). */
+export async function fetchAssetCtxs(): Promise<Record<string, HlAssetCtx>> {
+  const resp = await fetch('https://api.hyperliquid.xyz/info', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'metaAndAssetCtxs' }),
+  })
+  if (!resp.ok) throw new Error(`Hyperliquid metaAndAssetCtxs failed (${resp.status})`)
+
+  const data = (await resp.json()) as [
+    { universe?: Array<{ name: string }> },
+    Array<Record<string, unknown>>,
+  ]
+  const universe = data?.[0]?.universe ?? []
+  const ctxs = data?.[1] ?? []
+
+  const out: Record<string, HlAssetCtx> = {}
+  universe.forEach((asset, idx) => {
+    const ctx = ctxs[idx]
+    if (!ctx) return
+    const rawPrice = ctx.midPx ?? ctx.markPx
+    const price = Number(rawPrice)
+    if (rawPrice == null || !Number.isFinite(price)) return
+    const prev = Number(ctx.prevDayPx)
+    out[asset.name] = {
+      price,
+      changePct: Number.isFinite(prev) && prev > 0 ? ((price - prev) / prev) * 100 : 0,
+    }
+  })
+  return out
+}
+
 export interface HlPriceData {
   price: number
   size: number

@@ -17,8 +17,29 @@ export class ApiError extends Error {
   }
 }
 
+const DEFAULT_API_BASE = 'http://127.0.0.1:5000'
+
+/**
+ * Keep the API on the same host as the page (port 5000) so the Flask session
+ * cookie stays same-site regardless of whether the page is opened via
+ * localhost or 127.0.0.1.
+ */
+function defaultApiBase(): string {
+  if (typeof window !== 'undefined' && window.location.hostname) {
+    return `${window.location.protocol}//${window.location.hostname}:5000`
+  }
+  return DEFAULT_API_BASE
+}
+
+/** Absolute origin of the backend API; override with VITE_API_BASE for other hosts. */
+export function apiBase(): string {
+  const override = import.meta.env.VITE_API_BASE
+  const base = typeof override === 'string' && override !== '' ? override : defaultApiBase()
+  return base.replace(/\/+$/, '')
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`/api${path}`, {
+  const res = await fetch(`${apiBase()}/api${path}`, {
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     ...init,

@@ -1,3 +1,71 @@
+import { numberToHex, type EIP1193Provider } from 'viem'
+
+export interface WalletChainParams {
+  chainId: number
+  chainName: string
+  nativeCurrency: { name: string; symbol: string; decimals: number }
+  rpcUrls: readonly string[]
+  blockExplorerUrls?: readonly string[]
+}
+
+function rpcErrorCode(error: unknown): number | undefined {
+  const err = error as
+    | { code?: number; data?: { originalError?: { code?: number } } }
+    | null
+  return err?.code ?? err?.data?.originalError?.code
+}
+
+async function readWalletChainId(provider: EIP1193Provider): Promise<number> {
+  const chainId = await provider.request({ method: 'eth_chainId' })
+  return Number.parseInt(String(chainId), 16)
+}
+
+/**
+ * Switch the connected wallet to `params.chainId`, adding the chain first when
+ * the wallet does not know it yet. Reads the chain id straight from the wallet
+ * provider (instead of cached wagmi state) and waits until the provider
+ * actually reports the target chain.
+ */
+export async function ensureWalletChain(
+  provider: EIP1193Provider,
+  params: WalletChainParams,
+): Promise<void> {
+  if ((await readWalletChainId(provider)) === params.chainId) return
+
+  const switchChain = () =>
+    provider.request({
+      method: 'wallet_switchEthereumChain',
+      params: [{ chainId: numberToHex(params.chainId) }],
+    })
+
+  try {
+    await switchChain()
+  } catch (error) {
+    if (rpcErrorCode(error) !== 4902) throw error
+    await provider.request({
+      method: 'wallet_addEthereumChain',
+      params: [
+        {
+          chainId: numberToHex(params.chainId),
+          chainName: params.chainName,
+          nativeCurrency: params.nativeCurrency,
+          rpcUrls: [...params.rpcUrls],
+          blockExplorerUrls: params.blockExplorerUrls
+            ? [...params.blockExplorerUrls]
+            : undefined,
+        },
+      ],
+    })
+    await switchChain()
+  }
+
+  for (let attempt = 0; attempt < 20; attempt++) {
+    if ((await readWalletChainId(provider)) === params.chainId) return
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  }
+  throw new Error(`Wallet did not switch to ${params.chainName}.`)
+}
+
 export function shortAddress(address: string, size = 4): string {
   if (address.length <= 2 + size * 2) return address
   return `${address.slice(0, 2 + size)}…${address.slice(-size)}`

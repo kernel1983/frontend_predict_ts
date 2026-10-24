@@ -2,17 +2,19 @@ import { useState } from 'react'
 import { useAccount } from 'wagmi'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { DepositModal } from '@/components/wallet/DepositModal'
-import { MintCard } from '@/components/wallet/MintCard'
+import { ClaimCard } from '@/components/wallet/ClaimCard'
 import { WithdrawCard } from '@/components/wallet/WithdrawCard'
 import { Button } from '@/components/ui/Button'
 import { Modal } from '@/components/ui/Modal'
 import { useUsdcBalance } from '@/hooks/useUsdcBalance'
+import { useUsdgBalance } from '@/hooks/useUsdgBalance'
 import { useSession } from '@/hooks/useSession'
 import {
   computeDepositAddress,
   depositFactoriesByMode,
   type DepositFactoryConfig,
 } from '@/lib/deposit'
+import { formatAmount } from '@/lib/amounts'
 import { formatUsdc } from '@/lib/zentra'
 import { useChainModeStore } from '@/store/chainMode'
 
@@ -21,6 +23,7 @@ export default function PortfolioPage() {
   const { user } = useSession()
   const { mode } = useChainModeStore()
   const { data: balance, isLoading, error, refetch } = useUsdcBalance(address)
+  const { data: usdgBalance, isLoading: usdgLoading, refetch: refetchUsdg } = useUsdgBalance(address)
   const [depositOpen, setDepositOpen] = useState(false)
   const [withdrawOpen, setWithdrawOpen] = useState(false)
 
@@ -40,9 +43,17 @@ export default function PortfolioPage() {
       <section className="mt-6 grid gap-5 lg:max-w-4xl lg:grid-cols-2">
         <div className="rounded-2xl border border-border bg-bg p-5 shadow-card">
           <p className="text-sm text-text">Available</p>
-          <p className="mt-2 font-mono text-3xl font-semibold text-text-h">
-            {isLoading ? '…' : error ? '—' : `${formatUsdc(balance ?? 0n, 2)} USDC`}
-          </p>
+          <div className="mt-2 flex items-baseline justify-between gap-3">
+            <p className="font-mono text-3xl font-semibold text-text-h">
+              {isLoading ? '…' : error ? '—' : `${formatUsdc(balance ?? 0n, 2)} USDC`}
+            </p>
+          </div>
+          <div className="mt-2 flex items-baseline justify-between gap-3">
+            <p className="font-mono text-xl font-semibold text-text-h">
+              {usdgLoading ? '…' : `${formatAmount(usdgBalance ?? 0n, 6, 2)} USDG`}
+            </p>
+            <span className="text-xs text-text">USDG</span>
+          </div>
           {error && (
             <p className="mt-2 text-sm text-red-500">
               Unable to load your balance right now.
@@ -57,10 +68,11 @@ export default function PortfolioPage() {
         </div>
 
         {mode === 'testnet' && (
-          <MintCard
+          <ClaimCard
             address={address}
             onMinted={() => {
               void refetch()
+              void refetchUsdg()
             }}
           />
         )}
