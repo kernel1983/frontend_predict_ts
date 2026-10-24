@@ -9,14 +9,7 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
-      <Route
-        path="/"
-        element={
-          <ProtectedRoute>
-            <HomePage />
-          </ProtectedRoute>
-        }
-      />
+      <Route path="/" element={<HomePage />} />
       <Route
         path="/portfolio"
         element={
@@ -25,14 +18,7 @@ export default function App() {
           </ProtectedRoute>
         }
       />
-      <Route
-        path="/market/:marketId"
-        element={
-          <ProtectedRoute>
-            <MarketPage />
-          </ProtectedRoute>
-        }
-      />
+      <Route path="/market/:marketId" element={<MarketPage />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   )

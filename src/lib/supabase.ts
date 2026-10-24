@@ -1,5 +1,16 @@
+import { createClient } from '@supabase/supabase-js'
+
 const SUPABASE_URL = (import.meta.env.VITE_SUPABASE_URL ?? '').replace(/\/+$/, '')
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY ?? ''
+
+export const supabase =
+  SUPABASE_URL && SUPABASE_ANON_KEY
+    ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+    : (null as any)
+
+export function supabaseConfigured(): boolean {
+  return Boolean(SUPABASE_URL && SUPABASE_ANON_KEY)
+}
 
 /** Row shape of the public `markets` table (see backend/supabase_schema.sql). */
 export interface MarketRow {
@@ -19,10 +30,6 @@ export interface MarketRow {
   onchain_tx: string | null
   status: string
   created_at: string
-}
-
-export function supabaseConfigured(): boolean {
-  return Boolean(SUPABASE_URL && SUPABASE_ANON_KEY)
 }
 
 /** Read open markets straight from Supabase (RLS exposes the table read-only to `anon`). */

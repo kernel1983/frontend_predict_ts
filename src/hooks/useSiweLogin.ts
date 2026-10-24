@@ -1,8 +1,7 @@
 import { useCallback, useState } from 'react'
 import { useSignMessage } from 'wagmi'
-import { ApiError, api } from '@/lib/api'
 import { toErrorMessage } from '@/lib/wallet'
-import { useAuthStore } from '@/store/auth'
+import { supabase, supabaseConfigured } from '@/lib/supabase'
 
 export interface UseSiweLoginResult {
   login(messageOverride?: string): Promise<{ ok: true } | { ok: false; error: string }>
@@ -12,7 +11,7 @@ export interface UseSiweLoginResult {
 }
 
 export function useSiweLogin(address: string): UseSiweLoginResult {
-  const { mutateAsync: signMessageAsync } = useSignMessage()
+  const { signMessageAsync } = useSignMessage()
   const [verifying, setVerifying] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -21,13 +20,9 @@ export function useSiweLogin(address: string): UseSiweLoginResult {
   const login = useCallback(
     async (messageOverride?: string): Promise<{ ok: true } | { ok: false; error: string }> => {
       try {
-        let message = messageOverride
+        const message = messageOverride
         if (!message) {
-          const challenge = await api.walletChallenge(address)
-          message = challenge?.message
-        }
-        if (!message) {
-          const msg = 'The server did not return a signing message. Make sure the wallet address is registered'
+          const msg = 'Missing signing message. Get a challenge from siwe-challenge first.'
           setError(msg)
           return { ok: false, error: msg }
         }
@@ -37,15 +32,27 @@ export function useSiweLogin(address: string): UseSiweLoginResult {
         })
         setVerifying(true)
         try {
-          await api.walletVerify({ message, signature })
-          const me = await api.walletMe()
-          useAuthStore.getState().setUser(me)
+          if (!supabaseConfigured() || !supabase) {
+            throw new Error('Supabase not configured')
+          }
+          const { data, error: fnError } = await supabase.functions.invoke(
+            'siwe-verify',
+            { body: { message, signature } },
+          )
+          if (fnError) throw fnError
+          if (!data?.session) {
+            throw new Error(data?.error ?? 'Login failed')
+          }
+          const { error: sessionError } = await supabase.auth.setSession(
+            data.session,
+          )
+          if (sessionError) throw sessionError
           return { ok: true }
         } finally {
           setVerifying(false)
         }
       } catch (err) {
-        const msg = err instanceof ApiError ? err.message : toErrorMessage(err)
+        const msg = toErrorMessage(err)
         setError(msg)
         return { ok: false, error: msg }
       }

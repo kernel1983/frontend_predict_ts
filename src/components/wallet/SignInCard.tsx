@@ -2,12 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useChainId, useChains, useDisconnect } from 'wagmi'
 import { Button } from '@/components/ui/Button'
 import { Spinner } from '@/components/ui/Spinner'
-import { api } from '@/lib/api'
-import {
-  isWalletNotRegistered,
-  shortAddress,
-  toErrorMessage,
-} from '@/lib/wallet'
+import { isWalletNotRegistered, shortAddress, toErrorMessage } from '@/lib/wallet'
+import { supabase, supabaseConfigured } from '@/lib/supabase'
 import { useSiweLogin } from '@/hooks/useSiweLogin'
 import { Avatar } from './Avatar'
 
@@ -19,35 +15,28 @@ type RegResult =
 
 async function resolveRegStatus(address: string): Promise<RegResult> {
   try {
-    const challenge = await withTimeout(api.walletChallenge(address), 10000)
-    if (!challenge?.message) {
-      return { ok: false, kind: 'failed', error: 'The server did not return a signing message' }
+    if (!supabaseConfigured() || !supabase) {
+      return { ok: false, kind: 'failed', error: 'Supabase not configured' }
     }
-    return { ok: true, message: challenge.message }
+    const { data, error } = await supabase.functions.invoke('siwe-challenge', {
+      body: { address },
+    })
+    if (error) throw error
+    if (!data?.message) {
+      return { ok: false, kind: 'failed', error: data?.error ?? 'The server did not return a signing message' }
+    }
+    return { ok: true, message: data.message }
   } catch (err) {
     if (isWalletNotRegistered(err)) {
       return { ok: false, kind: 'unregistered', error: toErrorMessage(err) }
     }
-    return { ok: false, kind: 'failed', error: toErrorMessage(err) }
+    const msg = toErrorMessage(err)
+    const lower = msg.toLowerCase()
+    if (lower.includes('not registered')) {
+      return { ok: false, kind: 'unregistered', error: msg }
+    }
+    return { ok: false, kind: 'failed', error: msg }
   }
-}
-
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = window.setTimeout(() => {
-      reject(new Error('Request timed out, please retry'))
-    }, ms)
-    promise.then(
-      (value) => {
-        window.clearTimeout(timer)
-        resolve(value)
-      },
-      (err: unknown) => {
-        window.clearTimeout(timer)
-        reject(err)
-      },
-    )
-  })
 }
 
 interface SignInCardProps {
@@ -99,6 +88,7 @@ export function SignInCard({ address }: SignInCardProps) {
   }, [regStatus, message, login])
 
   const recheck = () => {
+    autoStarted.current = false
     setRegStatus('checking')
     setMessage(null)
     setRegError(null)

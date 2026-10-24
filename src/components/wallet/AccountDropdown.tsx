@@ -1,10 +1,9 @@
+import { Link, useNavigate } from 'react-router-dom'
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { useAccount, useDisconnect } from 'wagmi'
 import { useToast } from '@/components/ui/toast-context'
-import { api } from '@/lib/api'
 import { copyToClipboard, shortAddress } from '@/lib/wallet'
-import { useAuthStore } from '@/store/auth'
+import { supabase, supabaseConfigured } from '@/lib/supabase'
 import { AccountBadge } from './AccountBadge'
 
 export function AccountDropdown() {
@@ -16,9 +15,12 @@ export function AccountDropdown() {
 
   if (!address) {
     return (
-      <span className="flex h-9 items-center rounded-full border border-border bg-bg px-3 text-sm text-text">
-        Signed in
-      </span>
+      <Link
+        to="/login"
+        className="flex h-9 items-center rounded-full border border-border bg-bg px-3 text-sm text-text hover:border-accent-border hover:text-text-h"
+      >
+        Sign in
+      </Link>
     )
   }
 
@@ -35,13 +37,14 @@ export function AccountDropdown() {
   const handleLogout = async () => {
     setOpen(false)
     try {
-      await api.logout()
+      if (supabaseConfigured() && supabase) {
+        await supabase.auth.signOut()
+      }
     } catch {
       /* 会话可能已失效，忽略 */
     }
-    useAuthStore.getState().clearUser()
-    await disconnectAsync()
-    navigate('/login')
+    await disconnectAsync().catch(() => {})
+    navigate('/')
   }
 
   return (
