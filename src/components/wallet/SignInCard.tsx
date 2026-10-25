@@ -18,7 +18,7 @@ async function resolveRegStatus(address: string): Promise<RegResult> {
     if (!supabaseConfigured() || !supabase) {
       return { ok: false, kind: 'failed', error: 'Supabase not configured' }
     }
-    const { data, error } = await supabase.functions.invoke('siwe-challenge', {
+    const { data, error } = await supabase.functions.invoke('siwe-verify', {
       body: { address },
     })
     if (error) throw error
