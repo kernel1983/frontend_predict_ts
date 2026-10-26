@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { useAccount } from 'wagmi'
+import { useAccount } from '@/lib/dynamic'
 import { AppLayout } from '@/components/layout/AppLayout'
 import {
   PredictionCard,
@@ -249,6 +249,18 @@ export default function HomePage() {
               }}
               to="/market/btc_updownusdg_notlive"
             />
+            <Link
+              to="/chess/1"
+              className="rounded-2xl border border-accent-border bg-accent-bg p-5 transition-colors hover:border-accent"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <span className="text-3xl leading-none" aria-hidden="true">♞</span>
+                <span className="rounded-full border border-accent-border px-2 py-0.5 text-xs font-medium text-accent">DEBUG</span>
+              </div>
+              <h3 className="mt-5 text-base font-semibold text-text-h">Chess match</h3>
+              <p className="mt-1 text-sm text-text">Predict white win, draw, or black win.</p>
+              <p className="mt-4 text-sm font-medium text-accent">Open chessboard →</p>
+            </Link>
           </div>
         </section>
       )}

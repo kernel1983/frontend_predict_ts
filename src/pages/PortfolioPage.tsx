@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useAccount } from 'wagmi'
+import { useAccount } from '@/lib/dynamic'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { DepositModal } from '@/components/wallet/DepositModal'
 import { ClaimCard } from '@/components/wallet/ClaimCard'

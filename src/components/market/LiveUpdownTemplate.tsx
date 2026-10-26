@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import type { EIP1193Provider } from 'viem'
-import { useAccount, useSendTransaction } from 'wagmi'
+import { useAccount, useDynamicWallet, useSendTransaction } from '@/lib/dynamic'
 import { useQuery } from '@tanstack/react-query'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { Button } from '@/components/ui/Button'
@@ -91,7 +90,8 @@ export function LiveUpdownTemplate({
   if (chart.key !== feedKey) setChart(emptyPriceState(feedKey))
   const { price, points } = chart
 
-  const { address, connector } = useAccount()
+  const { address } = useAccount()
+  const wallet = useDynamicWallet()
   const { sendTransactionAsync, isPending: mintingUsdG } = useSendTransaction()
   const toast = useToast()
 
@@ -128,15 +128,13 @@ export function LiveUpdownTemplate({
 
   const switchToRhTestnet = async () => {
     setRhError(null)
-    if (!connector) {
+    if (!wallet) {
       setRhError('Connect a wallet first.')
       return
     }
     setRhSwitching(true)
     try {
-      const provider = (await connector.getProvider()) as EIP1193Provider | undefined
-      if (!provider) throw new Error('Wallet provider is not available.')
-      await ensureWalletChain(provider, RH_TESTNET_CHAIN)
+      await ensureWalletChain(wallet, RH_TESTNET_CHAIN)
     } catch (err) {
       if (!isUserRejected(err)) {
         setRhError(toErrorMessage(err))
@@ -148,13 +146,11 @@ export function LiveUpdownTemplate({
 
   const mintUsdGOnRh = async () => {
     setRhMintError(null)
-    if (!address || !connector) {
+    if (!address || !wallet) {
       setRhMintError('Connect a wallet first.')
       return
     }
     try {
-      const provider = (await connector.getProvider()) as EIP1193Provider | undefined
-      if (!provider) throw new Error('Wallet provider is not available.')
       const amount = parseUsdcAmount('100') ?? 100_000_000n
       const hash = await sendTransactionAsync({
         to: ZEN_CONTRACT,

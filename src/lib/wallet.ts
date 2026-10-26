@@ -8,6 +8,13 @@ export interface WalletChainParams {
   blockExplorerUrls?: readonly string[]
 }
 
+/** Dynamic 钱包的结构化子集（切换网络用） */
+export interface ChainSwitcherWallet {
+  switchNetwork(networkChainId: number | string): Promise<void>
+  getNetwork(): Promise<string | number | undefined>
+  connector: { supportsNetworkSwitching(): boolean }
+}
+
 function rpcErrorCode(error: unknown): number | undefined {
   const err = error as
     | { code?: number; data?: { originalError?: { code?: number } } }
@@ -20,13 +27,20 @@ async function readWalletChainId(provider: EIP1193Provider): Promise<number> {
   return Number.parseInt(String(chainId), 16)
 }
 
-/**
- * Switch the connected wallet to `params.chainId`, adding the chain first when
- * the wallet does not know it yet. Reads the chain id straight from the wallet
- * provider (instead of cached wagmi state) and waits until the provider
- * actually reports the target chain.
- */
-export async function ensureWalletChain(
+function readWalletNetworkId(
+  network: string | number | undefined,
+): number | undefined {
+  if (typeof network === 'number') return network
+  if (network == null) return undefined
+  const text = String(network).trim()
+  if (text.toLowerCase().startsWith('0x')) {
+    return Number.parseInt(text, 16)
+  }
+  const parsed = Number.parseInt(text, 10)
+  return Number.isNaN(parsed) ? undefined : parsed
+}
+
+async function ensureWalletChainViaProvider(
   provider: EIP1193Provider,
   params: WalletChainParams,
 ): Promise<void> {
@@ -61,6 +75,39 @@ export async function ensureWalletChain(
 
   for (let attempt = 0; attempt < 20; attempt++) {
     if ((await readWalletChainId(provider)) === params.chainId) return
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  }
+  throw new Error(`Wallet did not switch to ${params.chainName}.`)
+}
+
+/**
+ * Switch the connected wallet to `params.chainId`. Accepts either a raw
+ * EIP-1193 provider or a Dynamic wallet (switchNetwork/getNetwork). Waits
+ * until the wallet actually reports the target chain.
+ */
+export async function ensureWalletChain(
+  providerOrWallet: EIP1193Provider | ChainSwitcherWallet | null | undefined,
+  params: WalletChainParams,
+): Promise<void> {
+  if (providerOrWallet && 'request' in providerOrWallet) {
+    return ensureWalletChainViaProvider(providerOrWallet, params)
+  }
+
+  const wallet = providerOrWallet as ChainSwitcherWallet | null | undefined
+  if (!wallet) throw new Error('Connect a wallet first.')
+  if (readWalletNetworkId(await wallet.getNetwork()) === params.chainId) return
+
+  if (!wallet.connector.supportsNetworkSwitching()) {
+    throw new Error(
+      `Wallet does not support switching to ${params.chainName}.`,
+    )
+  }
+  await wallet.switchNetwork(params.chainId)
+
+  for (let attempt = 0; attempt < 20; attempt++) {
+    if (readWalletNetworkId(await wallet.getNetwork()) === params.chainId) {
+      return
+    }
     await new Promise((resolve) => setTimeout(resolve, 250))
   }
   throw new Error(`Wallet did not switch to ${params.chainName}.`)

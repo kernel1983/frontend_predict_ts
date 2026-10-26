@@ -1,5 +1,6 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { ProtectedRoute } from '@/components/guards/ProtectedRoute'
+import ChessDebugPage from '@/pages/ChessDebugPage'
 import HomePage from '@/pages/HomePage'
 import LoginPage from '@/pages/LoginPage'
 import MarketPage from '@/pages/MarketPage'
@@ -10,6 +11,7 @@ export default function App() {
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/" element={<HomePage />} />
+      <Route path="/chess/:gameId" element={<ChessDebugPage />} />
       <Route
         path="/portfolio"
         element={

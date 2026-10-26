@@ -4,7 +4,7 @@ import {
   useSendTransaction,
   useSwitchChain,
   useWaitForTransactionReceipt,
-} from 'wagmi'
+} from '@/lib/dynamic'
 import { type Address } from 'viem'
 import { Button } from '@/components/ui/Button'
 import { useToast } from '@/components/ui/toast-context'

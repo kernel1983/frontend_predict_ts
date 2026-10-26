@@ -4,7 +4,7 @@ import {
   useSendTransaction,
   useSwitchChain,
   useWaitForTransactionReceipt,
-} from 'wagmi'
+} from '@/lib/dynamic'
 import { Button } from '@/components/ui/Button'
 import { useToast } from '@/components/ui/toast-context'
 import { isUserRejected, toErrorMessage } from '@/lib/wallet'

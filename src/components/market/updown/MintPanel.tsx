@@ -1,12 +1,11 @@
 import { useState } from 'react'
-import type { EIP1193Provider } from 'viem'
 import {
   useAccount,
   useChains,
-  useConfig,
+  useDynamicWallet,
   useSendTransaction,
-} from 'wagmi'
-import { waitForTransactionReceipt } from 'wagmi/actions'
+  waitForReceipt,
+} from '@/lib/dynamic'
 import { Button } from '@/components/ui/Button'
 import { useToast } from '@/components/ui/toast-context'
 import { ensureWalletChain, isUserRejected, toErrorMessage } from '@/lib/wallet'
@@ -53,9 +52,9 @@ export function MintPanel({
   const decimals = quoteDecimals ?? QUOTE_DECIMALS[quote]
   const toast = useToast()
 
-  const { address, connector } = useAccount()
+  const { address } = useAccount()
+  const wallet = useDynamicWallet()
   const chains = useChains()
-  const config = useConfig()
   const { sendTransactionAsync, isPending: submitting } = useSendTransaction()
 
   const [amount, setAmount] = useState('')
@@ -126,7 +125,8 @@ export function MintPanel({
     configured && Boolean(address) && enabled && marketExists !== false
 
   const confirmed = async (hash: `0x${string}`) => {
-    const receipt = await waitForTransactionReceipt(config, {
+    const receipt = await waitForReceipt({
+      chainId: env.withdrawChainId,
       hash,
       confirmations: 1,
     })
@@ -134,13 +134,8 @@ export function MintPanel({
   }
 
   const ensureTargetChain = async () => {
-    if (!connector) throw new Error('Connect a wallet to mint.')
-    const provider = (await connector.getProvider()) as
-      | EIP1193Provider
-      | undefined
-    if (!provider) throw new Error('Wallet provider is not available.')
     const chain = chains.find((item) => item.id === env.withdrawChainId)
-    await ensureWalletChain(provider, {
+    await ensureWalletChain(wallet, {
       chainId: env.withdrawChainId,
       chainName: chain?.name ?? env.withdrawChainName,
       nativeCurrency: chain?.nativeCurrency ?? {

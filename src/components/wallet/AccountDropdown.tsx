@@ -1,6 +1,6 @@
 import { Link, useNavigate } from 'react-router-dom'
 import { useState } from 'react'
-import { useAccount, useDisconnect } from 'wagmi'
+import { useAccount, useDisconnect } from '@/lib/dynamic'
 import { useToast } from '@/components/ui/toast-context'
 import { copyToClipboard, shortAddress } from '@/lib/wallet'
 import { supabase, supabaseConfigured } from '@/lib/supabase'

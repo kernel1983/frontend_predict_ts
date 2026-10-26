@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { useChainId, useSendTransaction, useSwitchChain } from 'wagmi'
+import { useChainId, useSendTransaction, useSwitchChain } from '@/lib/dynamic'
 import { useToast } from '@/components/ui/toast-context'
 import { isUserRejected, toErrorMessage } from '@/lib/wallet'
 import {
