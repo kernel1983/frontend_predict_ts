@@ -3,7 +3,9 @@ import { Navigate } from 'react-router-dom'
 import { Spinner } from '@/components/ui/Spinner'
 import { ConnectWalletButton } from '@/components/wallet/ConnectWalletButton'
 import { SignInCard } from '@/components/wallet/SignInCard'
+import { WalletModal } from '@/components/wallet/WalletModal'
 import { useAccount, useDynamicContextSafe } from '@/lib/dynamic'
+import { useAccount as useWagmiAccount, useDisconnect as useWagmiDisconnect } from 'wagmi'
 import { useSession } from '@/hooks/useSession'
 
 export default function LoginPage() {
@@ -11,7 +13,10 @@ export default function LoginPage() {
   const { address, isConnected } = useAccount()
   const dyn = useDynamicContextSafe()
   const setShowAuthFlow = dyn?.setShowAuthFlow
+  const wagmiAccount = useWagmiAccount()
+  const { disconnectAsync: wagmiDisconnect } = useWagmiDisconnect()
   const [opening, setOpening] = useState(false)
+  const [walletModalOpen, setWalletModalOpen] = useState(false)
 
   if (status === 'loading') {
     return (
@@ -26,6 +31,18 @@ export default function LoginPage() {
   }
 
   const phase = isConnected && address ? 'signin' : 'connect'
+
+  const handleGoogle = () => {
+    setOpening(true)
+    if (wagmiAccount.isConnected) void wagmiDisconnect().catch(() => {})
+    setShowAuthFlow?.(true)
+    window.setTimeout(() => setOpening(false), 1_000)
+  }
+
+  const handleWalletConnected = () => {
+    // 互斥：登出 Dynamic
+    void dyn?.handleLogOut?.().catch(() => {})
+  }
 
   return (
     <div className="flex min-h-svh items-center justify-center bg-bg px-4 py-10">
@@ -46,40 +63,35 @@ export default function LoginPage() {
 
           <div className="min-h-40">
             {phase === 'connect' ? (
-              <ConnectWalletButton
-                loading={opening}
-                onClick={() => {
-                  setOpening(true)
-                  setShowAuthFlow?.(true)
-                  window.setTimeout(() => setOpening(false), 1_000)
-                }}
-              />
+              <div className="space-y-3">
+                <ConnectWalletButton
+                  loading={opening}
+                  label="Continue with Google"
+                  onClick={handleGoogle}
+                />
+                <ConnectWalletButton
+                  label="Connect wallet"
+                  onClick={() => setWalletModalOpen(true)}
+                />
+              </div>
             ) : (
               <SignInCard address={address!} key={address} />
             )}
           </div>
 
           <p className="mt-6 text-center text-xs text-text">
-            By signing in you agree to the
-            <span className="text-accent">Terms of Service</span> and
+            By signing in you agree to the{' '}
+            <span className="text-accent">Terms of Service</span> and{' '}
             <span className="text-accent">Privacy Policy</span>
           </p>
-
-          {import.meta.env.DEV && (
-            <div className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 font-mono text-xs text-amber-700 dark:text-amber-400">
-              <div>setShowAuthFlow: {dyn?.setShowAuthFlow ? 'ok' : 'MISSING'}</div>
-              <div>sdkHasLoaded: {String(dyn?.sdkHasLoaded ?? 'n/a')}</div>
-              <div>
-                projectSettings:{' '}
-                {(dyn as unknown as { projectSettings?: unknown } | null)?.projectSettings
-                  ? 'loaded'
-                  : 'NOT LOADED'}
-              </div>
-              <div>showAuthFlow: {String(dyn?.showAuthFlow ?? 'n/a')}</div>
-            </div>
-          )}
         </div>
       </div>
+
+      <WalletModal
+        open={walletModalOpen}
+        onClose={() => setWalletModalOpen(false)}
+        onConnected={handleWalletConnected}
+      />
     </div>
   )
 }

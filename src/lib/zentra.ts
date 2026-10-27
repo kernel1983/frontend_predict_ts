@@ -24,6 +24,9 @@ export const USDC_DECIMALS = 6
 export const ZEN_CONTRACT: Address =
   '0x00000000000000000000000000000000007a656e'
 
+export const MIN_DEPOSIT_USDC = 2
+export const MIN_WITHDRAW_USDC = 2
+
 export interface ZentraEnv {
   indexerUrl: string
   withdrawChainId: number

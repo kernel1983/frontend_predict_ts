@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useAccount } from '@/lib/dynamic'
+import { useAccount, useLoginType } from '@/lib/dynamic'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { DepositModal } from '@/components/wallet/DepositModal'
 import { ClaimCard } from '@/components/wallet/ClaimCard'
@@ -16,10 +16,12 @@ import {
 } from '@/lib/deposit'
 import { formatAmount } from '@/lib/amounts'
 import { formatUsdc } from '@/lib/zentra'
+import { MIN_DEPOSIT_USDC, MIN_WITHDRAW_USDC } from '@/lib/zentra'
 import { useChainModeStore } from '@/store/chainMode'
 
 export default function PortfolioPage() {
-  const { address } = useAccount()
+  const { address, connector } = useAccount()
+  const loginType = useLoginType()
   const { user } = useSession()
   const { mode } = useChainModeStore()
   const { data: balance, isLoading, error, refetch } = useUsdcBalance(address)
@@ -86,6 +88,93 @@ export default function PortfolioPage() {
         walletConnected={Boolean(address)}
         mainnet={mode === 'mainnet'}
       />
+
+      <section className="mt-6 max-w-4xl rounded-2xl border border-border bg-bg p-5 shadow-card">
+        <h2 className="text-base font-semibold text-text-h">Account &amp; funding</h2>
+
+        <div className="mt-4 grid gap-4 sm:grid-cols-2">
+          <div className="space-y-2">
+            <p className="text-xs font-medium uppercase tracking-wide text-text">
+              Login method
+            </p>
+            <p className="text-sm text-text-h">
+              {loginType === 'google'
+                ? 'Google (embedded wallet)'
+                : loginType === 'wallet'
+                  ? `Wallet (${connector?.name ?? 'browser wallet'})`
+                  : 'Not signed in'}
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <p className="text-xs font-medium uppercase tracking-wide text-text">
+              Controlling wallet address
+            </p>
+            <p className="break-all font-mono text-sm text-text-h">
+              {address ?? '—'}
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-5 border-t border-border pt-4">
+          <p className="text-xs font-medium uppercase tracking-wide text-text">
+            Deposit
+          </p>
+          <ul className="mt-2 space-y-1.5 text-sm text-text">
+            <li>
+              Networks:{' '}
+              <span className="text-text-h">
+                {mode === 'testnet' ? 'Base Sepolia' : 'Base (not configured)'}
+              </span>
+            </li>
+            <li>
+              Currency: <span className="text-text-h">USDC</span>
+            </li>
+            <li>
+              Minimum deposit:{' '}
+              <span className="text-text-h">{MIN_DEPOSIT_USDC} USDC</span>
+            </li>
+            <li>
+              Deposit address:{' '}
+              <span className="break-all font-mono text-text-h">
+                {predicted[0]?.address ?? '—'}
+              </span>
+            </li>
+          </ul>
+          <p className="mt-2 text-xs text-text">
+            Funds are credited to your Zentra account on the Base Sepolia rollup
+            after the deposit is detected.
+          </p>
+        </div>
+
+        <div className="mt-5 border-t border-border pt-4">
+          <p className="text-xs font-medium uppercase tracking-wide text-text">
+            Withdraw
+          </p>
+          <ul className="mt-2 space-y-1.5 text-sm text-text">
+            <li>
+              Network:{' '}
+              <span className="text-text-h">
+                {mode === 'testnet' ? 'Base Sepolia' : 'Base'}
+              </span>
+            </li>
+            <li>
+              Currency: <span className="text-text-h">USDC</span>
+            </li>
+            <li>
+              Minimum withdrawal:{' '}
+              <span className="text-text-h">{MIN_WITHDRAW_USDC} USDC</span>
+            </li>
+            <li>
+              Destination:{' '}
+              <span className="break-all font-mono text-text-h">
+                {address ?? '—'}
+              </span>{' '}
+              (your controlling wallet on Base Sepolia)
+            </li>
+          </ul>
+        </div>
+      </section>
 
       <Modal
         open={withdrawOpen}

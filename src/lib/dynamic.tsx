@@ -13,6 +13,13 @@ import {
 } from 'viem'
 import { waitForTransactionReceipt as viemWaitForTransactionReceipt } from 'viem/actions'
 import { baseSepolia } from 'viem/chains'
+import {
+  useAccount as useWagmiAccount,
+  useDisconnect as useWagmiDisconnect,
+  useSendTransaction as useWagmiSendTransaction,
+  useSignMessage as useWagmiSignMessage,
+  useSwitchChain as useWagmiSwitchChain,
+} from 'wagmi'
 import { evmNetworksOverride, appChains, findAppChain } from '@/lib/chains'
 import { useChainModeStore } from '@/store/chainMode'
 import { ZENTRA_ENVS } from '@/lib/zentra'
@@ -46,7 +53,6 @@ export interface SignerWallet {
 
 /** Dynamic provider 设置（overrides 回调必须为稳定引用） */
 export function DynamicProviders({ children }: { children: ReactNode }) {
-  // 未配置 environmentId 时跳过 Provider，避免 SDK 报错白屏
   if (!dynamicConfigured) return <>{children}</>
   return (
     <DynamicContextProvider
@@ -102,21 +108,51 @@ export interface WagmiAccount {
   connector: { id: string; name: string } | null
 }
 
+/** 登录方式：Google（Dynamic embedded wallet）或钱包（wagmi） */
+export type LoginType = 'google' | 'wallet' | null
+
+export function useLoginType(): LoginType {
+  const dynWallet = useDynamicWallet()
+  const wagmi = useWagmiAccount()
+  if (dynWallet) return 'google'
+  if (wagmi.isConnected) return 'wallet'
+  return null
+}
+
+export function useActiveAddress(): `0x${string}` | undefined {
+  return useAccount().address
+}
+
 export function useAccount(): WagmiAccount {
-  const wallet = useDynamicWallet()
-  const { network } = useDynamicContextSafe() ?? { network: undefined }
-  const chainId =
-    typeof network === 'number'
-      ? network
-      : network != null
-        ? parseNetworkId(network)
-        : undefined
+  const dynWallet = useDynamicWallet()
+  const dynCtx = useDynamicContextSafe()
+  const wagmi = useWagmiAccount()
+
+  if (dynWallet) {
+    const network = dynCtx?.network
+    const chainId =
+      typeof network === 'number'
+        ? network
+        : network != null
+          ? parseNetworkId(network)
+          : undefined
+    return {
+      address: dynWallet.address as `0x${string}`,
+      isConnected: true,
+      chainId: Number.isNaN(chainId as number) ? undefined : chainId,
+      chain: findAppChain(chainId),
+      connector: { id: dynWallet.connector.name, name: dynWallet.connector.name },
+    }
+  }
+
   return {
-    address: wallet?.address as `0x${string}` | undefined,
-    isConnected: Boolean(wallet),
-    chainId: Number.isNaN(chainId as number) ? undefined : chainId,
-    chain: findAppChain(chainId),
-    connector: wallet ? { id: wallet.connector.name, name: wallet.connector.name } : null,
+    address: wagmi.address,
+    isConnected: wagmi.isConnected,
+    chainId: wagmi.chainId,
+    chain: wagmi.chain as Chain | undefined,
+    connector: wagmi.connector
+      ? { id: wagmi.connector.id, name: wagmi.connector.name }
+      : null,
   }
 }
 
@@ -129,11 +165,20 @@ export function useChainId(): number | undefined {
 }
 
 export function useDisconnect() {
-  const { handleLogOut } = useDynamicContextSafe() ?? {}
+  const dynWallet = useDynamicWallet()
+  const dynCtx = useDynamicContextSafe()
+  const wagmiDisconnect = useWagmiDisconnect()
+
   const disconnectAsync = useCallback(async () => {
-    if (!handleLogOut) throw notConfiguredError()
-    await handleLogOut()
-  }, [handleLogOut])
+    if (dynWallet) {
+      const handleLogOut = dynCtx?.handleLogOut
+      if (!handleLogOut) throw notConfiguredError()
+      await handleLogOut()
+      return
+    }
+    await wagmiDisconnect.disconnectAsync()
+  }, [dynWallet, dynCtx, wagmiDisconnect])
+
   return { disconnect: disconnectAsync, disconnectAsync }
 }
 
@@ -144,23 +189,32 @@ function notConfiguredError(): Error {
 }
 
 export function useSignMessage() {
-  const wallet = useDynamicWallet()
+  const dynWallet = useDynamicWallet()
+  const wagmiSign = useWagmiSignMessage()
   const [isPending, setPending] = useState(false)
 
   const signMessageAsync = useCallback(
     async ({ message }: { message: string }): Promise<`0x${string}`> => {
-      if (!dynamicConfigured) throw notConfiguredError()
-      if (!wallet) throw new Error('Connect a wallet to sign.')
+      if (dynWallet) {
+        if (!dynamicConfigured) throw notConfiguredError()
+        setPending(true)
+        try {
+          const signature = await dynWallet.signMessage(message)
+          if (!signature) throw new Error('Signature request was not completed.')
+          return signature as `0x${string}`
+        } finally {
+          setPending(false)
+        }
+      }
       setPending(true)
       try {
-        const signature = await wallet.signMessage(message)
-        if (!signature) throw new Error('Signature request was not completed.')
+        const signature = await wagmiSign.signMessageAsync({ message })
         return signature as `0x${string}`
       } finally {
         setPending(false)
       }
     },
-    [wallet],
+    [dynWallet, wagmiSign],
   )
 
   const signMessage = useCallback(
@@ -174,7 +228,11 @@ export function useSignMessage() {
     [signMessageAsync],
   )
 
-  return { signMessage, signMessageAsync, isPending }
+  return {
+    signMessage,
+    signMessageAsync,
+    isPending: isPending || wagmiSign.isPending,
+  }
 }
 
 export interface SendTransactionParams {
@@ -186,30 +244,46 @@ export interface SendTransactionParams {
 }
 
 export function useSendTransaction() {
-  const wallet = useDynamicWallet()
+  const dynWallet = useDynamicWallet()
+  const wagmiSend = useWagmiSendTransaction()
   const [isPending, setPending] = useState(false)
 
   const sendTransactionAsync = useCallback(
     async (params: SendTransactionParams): Promise<`0x${string}`> => {
-      if (!dynamicConfigured) throw notConfiguredError()
-      if (!wallet) throw new Error('Connect a wallet first.')
+      if (dynWallet) {
+        if (!dynamicConfigured) throw notConfiguredError()
+        setPending(true)
+        try {
+          const walletClient = await dynWallet.getWalletClient(
+            params.chainId != null ? String(params.chainId) : undefined,
+          )
+          const hash = await walletClient.sendTransaction({
+            to: params.to,
+            value: params.value ?? 0n,
+            data: params.data,
+          })
+          if (!hash) throw new Error('Transaction was not submitted.')
+          return hash
+        } finally {
+          setPending(false)
+        }
+      }
       setPending(true)
       try {
-        const walletClient = await wallet.getWalletClient(
-          params.chainId != null ? String(params.chainId) : undefined,
-        )
-        const hash = await walletClient.sendTransaction({
+        const hash = await wagmiSend.sendTransactionAsync({
           to: params.to,
           value: params.value ?? 0n,
           data: params.data,
+          chainId: params.chainId,
+          account: params.account as `0x${string}` | undefined,
         })
         if (!hash) throw new Error('Transaction was not submitted.')
-        return hash
+        return hash as `0x${string}`
       } finally {
         setPending(false)
       }
     },
-    [wallet],
+    [dynWallet, wagmiSend],
   )
 
   const sendTransaction = useCallback(
@@ -223,18 +297,26 @@ export function useSendTransaction() {
     [sendTransactionAsync],
   )
 
-  return { sendTransaction, sendTransactionAsync, isPending }
+  return {
+    sendTransaction,
+    sendTransactionAsync,
+    isPending: isPending || wagmiSend.isPending,
+  }
 }
 
 export function useSwitchChain() {
-  const wallet = useDynamicWallet()
+  const dynWallet = useDynamicWallet()
+  const wagmiSwitch = useWagmiSwitchChain()
   const switchChainAsync = useCallback(
     async ({ chainId }: { chainId: number }) => {
-      if (!dynamicConfigured) throw notConfiguredError()
-      if (!wallet) throw new Error('Connect a wallet first.')
-      await wallet.switchNetwork(chainId)
+      if (dynWallet) {
+        if (!dynamicConfigured) throw notConfiguredError()
+        await dynWallet.switchNetwork(chainId)
+        return
+      }
+      await wagmiSwitch.switchChainAsync({ chainId })
     },
-    [wallet],
+    [dynWallet, wagmiSwitch],
   )
   const switchChain = useCallback(
     async (args: { chainId: number }) => {

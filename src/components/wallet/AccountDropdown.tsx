@@ -1,6 +1,7 @@
 import { Link, useNavigate } from 'react-router-dom'
 import { useState } from 'react'
 import { useAccount, useDisconnect } from '@/lib/dynamic'
+import { useDisconnect as useWagmiDisconnect } from 'wagmi'
 import { useToast } from '@/components/ui/toast-context'
 import { copyToClipboard, shortAddress } from '@/lib/wallet'
 import { supabase, supabaseConfigured } from '@/lib/supabase'
@@ -9,6 +10,7 @@ import { AccountBadge } from './AccountBadge'
 export function AccountDropdown() {
   const { address, chain } = useAccount()
   const { disconnectAsync } = useDisconnect()
+  const { disconnectAsync: wagmiDisconnect } = useWagmiDisconnect()
   const toast = useToast()
   const navigate = useNavigate()
   const [open, setOpen] = useState(false)
@@ -44,7 +46,8 @@ export function AccountDropdown() {
       /* 会话可能已失效，忽略 */
     }
     await disconnectAsync().catch(() => {})
-    navigate('/')
+    await wagmiDisconnect().catch(() => {})
+    navigate('/login')
   }
 
   return (
