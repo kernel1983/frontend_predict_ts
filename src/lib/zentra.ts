@@ -37,6 +37,13 @@ export interface ZentraEnv {
 }
 
 export const ZENTRA_ENVS: Record<ChainMode, ZentraEnv> = {
+  local: {
+    indexerUrl: 'http://127.0.0.1:8545',
+    withdrawChainId: 31337,
+    withdrawChainName: 'Local Zentra',
+    explorerBase: '',
+    mintEnabled: true,
+  },
   testnet: {
     indexerUrl: 'https://testnet3.zentra.dev',
     withdrawChainId: 84532,

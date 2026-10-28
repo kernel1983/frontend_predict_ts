@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 
-export type ChainMode = 'testnet' | 'mainnet'
+export type ChainMode = 'local' | 'testnet' | 'mainnet'
 
 interface ChainModeState {
   mode: ChainMode
@@ -12,7 +12,7 @@ const STORAGE_KEY = 'predict:chain-mode'
 function loadMode(): ChainMode {
   try {
     const value = localStorage.getItem(STORAGE_KEY)
-    if (value === 'testnet' || value === 'mainnet') return value
+    if (value === 'local' || value === 'testnet' || value === 'mainnet') return value
   } catch {
     // ignore storage errors
   }

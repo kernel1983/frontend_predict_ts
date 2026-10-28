@@ -24,6 +24,7 @@ export interface DepositFactoryConfig {
 }
 
 export const depositFactoriesByMode: Record<ChainMode, DepositFactoryConfig[]> = {
+  local: [],
   testnet: [
     {
       chainId: 84532,

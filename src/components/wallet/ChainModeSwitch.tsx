@@ -2,6 +2,7 @@ import { cn } from '@/lib/cn'
 import { useChainModeStore, type ChainMode } from '@/store/chainMode'
 
 const modes: { value: ChainMode; label: string }[] = [
+  { value: 'local', label: 'Local' },
   { value: 'testnet', label: 'Testnet' },
   { value: 'mainnet', label: 'Mainnet' },
 ]

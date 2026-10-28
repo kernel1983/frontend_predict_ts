@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAccount } from '@/lib/dynamic'
 import { AppLayout } from '@/components/layout/AppLayout'
+import { NewChessGameModal } from '@/components/chess/NewChessGameModal'
 import {
   PredictionCard,
   type PredictionMarket,
@@ -127,6 +128,7 @@ export default function HomePage() {
   const { mode } = useChainModeStore()
   const [depositOpen, setDepositOpen] = useState(false)
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000))
+  const [showNewChessGame, setShowNewChessGame] = useState(false)
   const { data: balance, isLoading: balanceLoading, error: balanceError } = useUsdcBalance(address)
   const { data: rows, isPending: marketsLoading, error: marketsError } = useMarkets()
   const { data: quotes } = useAssetCtxs()
@@ -170,6 +172,25 @@ export default function HomePage() {
           <Button size="md" onClick={() => setDepositOpen(true)}>Deposit</Button>
         </div>
       </div>
+
+      <section className="mt-6">
+        <div className="rounded-2xl border border-accent-border bg-accent-bg p-5">
+          <button type="button" onClick={() => setShowNewChessGame(true)} className="mb-4 ml-auto block w-fit rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white transition-opacity hover:opacity-90">
+            + New chess game
+          </button>
+          <Link to="/chess/1" className="flex items-center gap-4 transition-colors hover:opacity-80">
+            <span className="text-4xl leading-none" aria-hidden="true">♞</span>
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-lg font-semibold text-text-h">Chess match</h2>
+                <span className="rounded-full border border-accent-border px-2 py-0.5 text-xs font-medium text-accent">GAME</span>
+              </div>
+              <p className="mt-1 text-sm text-text">Predict white win, draw, or black win.</p>
+            </div>
+          </Link>
+        </div>
+        <NewChessGameModal open={showNewChessGame} onClose={() => setShowNewChessGame(false)} />
+      </section>
 
       {!supabaseConfigured() && (
         <p className="mt-4 rounded-xl border border-border bg-bg px-4 py-3 text-sm text-text">
@@ -249,18 +270,6 @@ export default function HomePage() {
               }}
               to="/market/btc_updownusdg_notlive"
             />
-            <Link
-              to="/chess/1"
-              className="rounded-2xl border border-accent-border bg-accent-bg p-5 transition-colors hover:border-accent"
-            >
-              <div className="flex items-start justify-between gap-3">
-                <span className="text-3xl leading-none" aria-hidden="true">♞</span>
-                <span className="rounded-full border border-accent-border px-2 py-0.5 text-xs font-medium text-accent">DEBUG</span>
-              </div>
-              <h3 className="mt-5 text-base font-semibold text-text-h">Chess match</h3>
-              <p className="mt-1 text-sm text-text">Predict white win, draw, or black win.</p>
-              <p className="mt-4 text-sm font-medium text-accent">Open chessboard →</p>
-            </Link>
           </div>
         </section>
       )}

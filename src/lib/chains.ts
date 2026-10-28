@@ -27,6 +27,15 @@ export const robinhoodTestnet: Chain = {
   },
 }
 
+export const localChain: Chain = {
+  id: 31337,
+  name: 'Local Zentra',
+  nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+  rpcUrls: {
+    default: { http: ['http://127.0.0.1:8545'] },
+  },
+}
+
 /** 应用支持的全部 EVM 链（wagmi 时代的链表 + 调试链） */
 export const appChains: readonly Chain[] = [
   mainnet,
@@ -37,6 +46,7 @@ export const appChains: readonly Chain[] = [
   sepolia,
   baseSepolia,
   robinhoodTestnet,
+  localChain,
 ]
 
 export function findAppChain(chainId: number | undefined): Chain | undefined {

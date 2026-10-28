@@ -16,7 +16,7 @@ import {
 } from '@/lib/deposit'
 import { formatAmount } from '@/lib/amounts'
 import { formatUsdc } from '@/lib/zentra'
-import { MIN_DEPOSIT_USDC, MIN_WITHDRAW_USDC } from '@/lib/zentra'
+import { MIN_DEPOSIT_USDC, MIN_WITHDRAW_USDC, ZENTRA_ENVS } from '@/lib/zentra'
 import { useChainModeStore } from '@/store/chainMode'
 
 export default function PortfolioPage() {
@@ -24,6 +24,7 @@ export default function PortfolioPage() {
   const loginType = useLoginType()
   const { user } = useSession()
   const { mode } = useChainModeStore()
+  const env = ZENTRA_ENVS[mode]
   const { data: balance, isLoading, error, refetch } = useUsdcBalance(address)
   const { data: usdgBalance, isLoading: usdgLoading, refetch: refetchUsdg } = useUsdgBalance(address)
   const [depositOpen, setDepositOpen] = useState(false)
@@ -69,7 +70,7 @@ export default function PortfolioPage() {
           </div>
         </div>
 
-        {mode === 'testnet' && (
+        {env.mintEnabled && (
           <ClaimCard
             address={address}
             onMinted={() => {
@@ -124,7 +125,9 @@ export default function PortfolioPage() {
             <li>
               Networks:{' '}
               <span className="text-text-h">
-                {mode === 'testnet' ? 'Base Sepolia' : 'Base (not configured)'}
+                {factories.length > 0
+                  ? factories.map((factory) => factory.chainName).join(', ')
+                  : 'Not configured'}
               </span>
             </li>
             <li>
@@ -142,7 +145,7 @@ export default function PortfolioPage() {
             </li>
           </ul>
           <p className="mt-2 text-xs text-text">
-            Funds are credited to your Zentra account on the Base Sepolia rollup
+            Funds are credited to your Zentra account on the selected network
             after the deposit is detected.
           </p>
         </div>
@@ -155,7 +158,7 @@ export default function PortfolioPage() {
             <li>
               Network:{' '}
               <span className="text-text-h">
-                {mode === 'testnet' ? 'Base Sepolia' : 'Base'}
+                {env.withdrawChainName}
               </span>
             </li>
             <li>
@@ -170,7 +173,7 @@ export default function PortfolioPage() {
               <span className="break-all font-mono text-text-h">
                 {address ?? '—'}
               </span>{' '}
-              (your controlling wallet on Base Sepolia)
+              (your controlling wallet on {env.withdrawChainName})
             </li>
           </ul>
         </div>

@@ -10,7 +10,7 @@ import {
   polygon,
   sepolia,
 } from 'viem/chains'
-import { robinhoodTestnet } from '@/lib/chains'
+import { robinhoodTestnet, localChain } from '@/lib/chains'
 
 const chains = [
   mainnet,
@@ -21,6 +21,7 @@ const chains = [
   sepolia,
   baseSepolia,
   robinhoodTestnet,
+  localChain,
 ] as const
 
 const projectId = import.meta.env.VITE_WALLETCONNECT_PROJECT_ID

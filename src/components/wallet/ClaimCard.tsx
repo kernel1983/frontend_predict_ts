@@ -46,7 +46,8 @@ export function ClaimCard({
 
   const ensureTargetChain = async () => {
     const chain = chains.find((item) => item.id === env.withdrawChainId)
-    await ensureWalletChain(wallet, {
+    const walletOrProvider = wallet ?? (typeof window !== 'undefined' ? (window as { ethereum?: unknown }).ethereum : null)
+    await ensureWalletChain(walletOrProvider as never, {
       chainId: env.withdrawChainId,
       chainName: chain?.name ?? env.withdrawChainName,
       nativeCurrency: chain?.nativeCurrency ?? {
@@ -74,6 +75,8 @@ export function ClaimCard({
         to: ZEN_CONTRACT,
         value: 0n,
         data,
+        gas: 210000n,
+        gasPrice: 1000000000n,
       })
       setTxHash(hash)
       toast.push({ title: `Claim ${token} submitted`, variant: 'success' })

@@ -37,6 +37,11 @@ export interface MinimalWalletClient {
     to: `0x${string}`
     value?: bigint
     data?: `0x${string}`
+    gas?: bigint
+    nonce?: number
+    gasPrice?: bigint
+    maxFeePerGas?: bigint
+    maxPriorityFeePerGas?: bigint
   }): Promise<`0x${string}` | undefined>
 }
 
@@ -241,6 +246,11 @@ export interface SendTransactionParams {
   to: `0x${string}`
   value?: bigint
   data?: `0x${string}`
+  gas?: bigint
+  nonce?: number
+  gasPrice?: bigint
+  maxFeePerGas?: bigint
+  maxPriorityFeePerGas?: bigint
 }
 
 export function useSendTransaction() {
@@ -261,7 +271,12 @@ export function useSendTransaction() {
             to: params.to,
             value: params.value ?? 0n,
             data: params.data,
-          })
+            gas: params.gas,
+            nonce: params.nonce,
+            gasPrice: params.gasPrice,
+            maxFeePerGas: params.maxFeePerGas,
+            maxPriorityFeePerGas: params.maxPriorityFeePerGas,
+          } as any)
           if (!hash) throw new Error('Transaction was not submitted.')
           return hash
         } finally {
@@ -276,7 +291,12 @@ export function useSendTransaction() {
           data: params.data,
           chainId: params.chainId,
           account: params.account as `0x${string}` | undefined,
-        })
+          gas: params.gas,
+          nonce: params.nonce,
+          gasPrice: params.gasPrice,
+          maxFeePerGas: params.maxFeePerGas,
+          maxPriorityFeePerGas: params.maxPriorityFeePerGas,
+        } as any)
         if (!hash) throw new Error('Transaction was not submitted.')
         return hash as `0x${string}`
       } finally {
