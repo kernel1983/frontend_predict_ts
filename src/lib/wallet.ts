@@ -15,11 +15,39 @@ export interface ChainSwitcherWallet {
   connector: { supportsNetworkSwitching(): boolean }
 }
 
+interface ErrorLike {
+  code?: unknown
+  message?: unknown
+  shortMessage?: unknown
+  details?: unknown
+  data?: { originalError?: { code?: unknown; message?: unknown } | null }
+}
+
 function rpcErrorCode(error: unknown): number | undefined {
-  const err = error as
-    | { code?: number; data?: { originalError?: { code?: number } } }
-    | null
-  return err?.code ?? err?.data?.originalError?.code
+  const err = error as ErrorLike | null
+  for (const candidate of [err?.code, err?.data?.originalError?.code]) {
+    if (typeof candidate === 'number') return candidate
+  }
+  return undefined
+}
+
+function pickProviderErrorMessage(error: unknown): string | null {
+  if (!error || typeof error !== 'object') return null
+  const err = error as ErrorLike
+  const candidates = [
+    err.message,
+    err.shortMessage,
+    err.details,
+    err.data?.originalError?.message,
+  ]
+  const first = candidates.find(
+    (value): value is string => typeof value === 'string' && value.trim().length > 0,
+  )
+  return first ?? null
+}
+
+function isRabbyProvider(provider: unknown): boolean {
+  return Boolean((provider as { isRabby?: boolean } | null)?.isRabby)
 }
 
 async function readWalletChainId(provider: EIP1193Provider): Promise<number> {
@@ -56,20 +84,28 @@ async function ensureWalletChainViaProvider(
     await switchChain()
   } catch (error) {
     if (rpcErrorCode(error) !== 4902) throw error
-    await provider.request({
-      method: 'wallet_addEthereumChain',
-      params: [
-        {
-          chainId: numberToHex(params.chainId),
-          chainName: params.chainName,
-          nativeCurrency: params.nativeCurrency,
-          rpcUrls: [...params.rpcUrls],
-          blockExplorerUrls: params.blockExplorerUrls
-            ? [...params.blockExplorerUrls]
-            : undefined,
-        },
-      ],
-    })
+    try {
+      await provider.request({
+        method: 'wallet_addEthereumChain',
+        params: [
+          {
+            chainId: numberToHex(params.chainId),
+            chainName: params.chainName,
+            nativeCurrency: params.nativeCurrency,
+            rpcUrls: [...params.rpcUrls],
+            blockExplorerUrls: params.blockExplorerUrls
+              ? [...params.blockExplorerUrls]
+              : undefined,
+          },
+        ],
+      })
+    } catch (addError) {
+      const detail = pickProviderErrorMessage(addError) ?? 'wallet_addEthereumChain failed.'
+      const hint = isRabbyProvider(provider)
+        ? ` Rabby may not support this network (chainId ${params.chainId}). Switch to another wallet (e.g. MetaMask) or add the network manually in Rabby's settings.`
+        : ` Ask the wallet to add ${params.chainName} manually.`
+      throw new Error(`${detail}${hint}`)
+    }
     await switchChain()
   }
 
@@ -132,11 +168,14 @@ export function accountColor(address: string): string {
 
 export function isUserRejected(error: unknown): boolean {
   const name = (error as { name?: string } | null)?.name ?? ''
-  const message = (error as { message?: string } | null)?.message ?? ''
+  const completion = pickProviderErrorMessage(error) ?? ''
+  const message = completion.toLowerCase()
   return (
     name.includes('UserRejectedRequestError') ||
     message.includes('rejected') ||
-    message.includes('declined')
+    message.includes('declined') ||
+    message.includes('user deny') ||
+    rpcErrorCode(error) === 4001
   )
 }
 
@@ -151,9 +190,15 @@ export function isWalletNotRegistered(error: unknown): boolean {
 }
 
 export function toErrorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message
-  if (typeof error === 'string') return error
-  return 'Something went wrong. Please try again.'
+  if (error instanceof Error) {
+    return error.message && error.message.trim()
+      ? error.message
+      : 'Something went wrong. Please try again.'
+  }
+  if (typeof error === 'string' && error.trim()) return error
+  return (
+    pickProviderErrorMessage(error) ?? 'Something went wrong. Please try again.'
+  )
 }
 
 export async function copyToClipboard(text: string): Promise<void> {

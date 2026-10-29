@@ -82,6 +82,7 @@ export function NewChessGameModal({ open, onClose }: { open: boolean; onClose: (
       setCreatedGameId(gameId)
       toast.push({ title: 'Chess game created', description: `Game ${gameId}`, variant: 'success' })
     } catch (reason) {
+      console.error('[chess] create game failed', reason)
       if (!isUserRejected(reason)) setError(toErrorMessage(reason))
     }
   }

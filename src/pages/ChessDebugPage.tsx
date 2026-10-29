@@ -350,6 +350,7 @@ export default function ChessDebugPage() {
         setMoveError('Move sent, but mining (next block) failed. Retry mining.')
       }
     } catch (err) {
+      console.error('[chess] move failed', err)
       if (!isUserRejected(err)) setMoveError(toErrorMessage(err))
     } finally {
       setSendingMove(false)
