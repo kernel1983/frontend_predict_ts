@@ -12,6 +12,7 @@ import {
   type TransactionReceipt,
 } from 'viem'
 import { waitForTransactionReceipt as viemWaitForTransactionReceipt } from 'viem/actions'
+import { estimateFeesPerGas, estimateGas } from 'viem/actions'
 import { baseSepolia } from 'viem/chains'
 import {
   useAccount as useWagmiAccount,
@@ -35,11 +36,11 @@ export const dynamicConfigured = Boolean(environmentId && environmentId.trim())
 export interface MinimalWalletClient {
   sendTransaction(params: {
     to: `0x${string}`
+    type?: 'legacy' | 'eip1559'
     value?: bigint
     data?: `0x${string}`
     gas?: bigint
     nonce?: number
-    gasPrice?: bigint
     maxFeePerGas?: bigint
     maxPriorityFeePerGas?: bigint
   }): Promise<`0x${string}` | undefined>
@@ -248,7 +249,6 @@ export interface SendTransactionParams {
   data?: `0x${string}`
   gas?: bigint
   nonce?: number
-  gasPrice?: bigint
   maxFeePerGas?: bigint
   maxPriorityFeePerGas?: bigint
 }
@@ -258,25 +258,55 @@ export function useSendTransaction() {
   const wagmiSend = useWagmiSendTransaction()
   const [isPending, setPending] = useState(false)
 
+  // Dynamic 的 Legacy signer 会严格检查交易对象的属性名；不要把值为
+  // undefined 的 EIP-1559 字段也传进去，否则会被误判为混合交易类型。
+  const buildTransaction = (params: SendTransactionParams) => ({
+    to: params.to,
+    value: params.value ?? 0n,
+    //...(params.maxFeePerGas !== undefined || params.maxPriorityFeePerGas !== undefined
+    //  ? { type: 'eip1559' as const }
+    //  : {}),
+    ...(params.data !== undefined ? { data: params.data } : {}),
+    ...(params.gas !== undefined ? { gas: params.gas } : {}),
+    ...(params.nonce !== undefined ? { nonce: params.nonce } : {}),
+    ...(params.maxFeePerGas !== undefined
+      ? { maxFeePerGas: params.maxFeePerGas }
+      : {}),
+    ...(params.maxPriorityFeePerGas !== undefined
+      ? { maxPriorityFeePerGas: params.maxPriorityFeePerGas }
+      : {}),
+  })
+
   const sendTransactionAsync = useCallback(
     async (params: SendTransactionParams): Promise<`0x${string}`> => {
       if (dynWallet) {
         if (!dynamicConfigured) throw notConfiguredError()
         setPending(true)
         try {
+          const chainId = params.chainId ?? currentChainId()
+          const publicClient = publicClientFor(chainId)
+          const fees = await estimateFeesPerGas(publicClient)
+          const gas =
+            params.gas ??
+            (await estimateGas(publicClient, {
+              account: dynWallet.address as `0x${string}`,
+              to: params.to,
+              value: params.value ?? 0n,
+              data: params.data,
+            }))
+          const transaction = buildTransaction({
+            ...params,
+            chainId,
+            gas,
+            maxFeePerGas: params.maxFeePerGas ?? fees.maxFeePerGas,
+            maxPriorityFeePerGas:
+              params.maxPriorityFeePerGas ?? fees.maxPriorityFeePerGas,
+          })
           const walletClient = await dynWallet.getWalletClient(
-            params.chainId != null ? String(params.chainId) : undefined,
+            String(chainId),
           )
-          const hash = await walletClient.sendTransaction({
-            to: params.to,
-            value: params.value ?? 0n,
-            data: params.data,
-            gas: params.gas,
-            nonce: params.nonce,
-            gasPrice: params.gasPrice,
-            maxFeePerGas: params.maxFeePerGas,
-            maxPriorityFeePerGas: params.maxPriorityFeePerGas,
-          } as any)
+	  console.log(transaction);
+          const hash = await walletClient.sendTransaction(transaction as any)
           if (!hash) throw new Error('Transaction was not submitted.')
           return hash
         } finally {
@@ -286,16 +316,9 @@ export function useSendTransaction() {
       setPending(true)
       try {
         const hash = await wagmiSend.sendTransactionAsync({
-          to: params.to,
-          value: params.value ?? 0n,
-          data: params.data,
+          ...buildTransaction(params),
           chainId: params.chainId,
           account: params.account as `0x${string}` | undefined,
-          gas: params.gas,
-          nonce: params.nonce,
-          gasPrice: params.gasPrice,
-          maxFeePerGas: params.maxFeePerGas,
-          maxPriorityFeePerGas: params.maxPriorityFeePerGas,
         } as any)
         if (!hash) throw new Error('Transaction was not submitted.')
         return hash as `0x${string}`
@@ -307,13 +330,7 @@ export function useSendTransaction() {
   )
 
   const sendTransaction = useCallback(
-    async (params: SendTransactionParams) => {
-      try {
-        return await sendTransactionAsync(params)
-      } catch {
-        return undefined
-      }
-    },
+    (params: SendTransactionParams) => sendTransactionAsync(params),
     [sendTransactionAsync],
   )
 

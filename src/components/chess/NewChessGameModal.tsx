@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { useAccount, useDynamicWallet, useSendTransaction } from '@/lib/dynamic'
+import { useAccount, useChains, useDynamicWallet, useSendTransaction } from '@/lib/dynamic'
 import { useToast } from '@/components/ui/toast-context'
 import { ensureWalletChain, isUserRejected, toErrorMessage } from '@/lib/wallet'
-import { ZEN_CONTRACT, buildZenCallData } from '@/lib/zentra'
+import { ZENTRA_ENVS, ZEN_CONTRACT, buildZenCallData } from '@/lib/zentra'
+import { useChainModeStore } from '@/store/chainMode'
 
 export function NewChessGameModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [opponentAddress, setOpponentAddress] = useState('')
@@ -12,6 +13,9 @@ export function NewChessGameModal({ open, onClose }: { open: boolean; onClose: (
   const wallet = useDynamicWallet()
   const { sendTransactionAsync, isPending } = useSendTransaction()
   const toast = useToast()
+  const mode = useChainModeStore((state) => state.mode)
+  const env = ZENTRA_ENVS[mode]
+  const chains = useChains()
   const [error, setError] = useState<string | null>(null)
   const [createdGameId, setCreatedGameId] = useState<string | null>(null)
   const [waitingForEvent, setWaitingForEvent] = useState(false)
@@ -24,21 +28,27 @@ export function NewChessGameModal({ open, onClose }: { open: boolean; onClose: (
     }
     try {
       const walletOrProvider = wallet ?? (typeof window !== 'undefined' ? (window as { ethereum?: unknown }).ethereum : null)
+      const targetChain = chains.find((item) => item.id === env.withdrawChainId)
       await ensureWalletChain(walletOrProvider as never, {
-        chainId: 31337,
-        chainName: 'Local Zentra',
-        nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
-        rpcUrls: ['http://127.0.0.1:8545'],
+        chainId: env.withdrawChainId,
+        chainName: targetChain?.name ?? env.withdrawChainName,
+        nativeCurrency: targetChain?.nativeCurrency ?? {
+          name: 'Ether',
+          symbol: 'ETH',
+          decimals: 18,
+        },
+        rpcUrls: targetChain?.rpcUrls.default.http ?? [],
+        blockExplorerUrls: targetChain?.blockExplorers?.default
+          ? [targetChain.blockExplorers.default.url]
+          : undefined,
       })
       const data = buildZenCallData('chess_create_game', createMode === 'opponent' ? [opponentAddress.trim()] : [])
       const hash = await sendTransactionAsync({
-        chainId: 31337,
+        chainId: env.withdrawChainId,
         account: address,
         to: ZEN_CONTRACT,
         value: 0n,
         data,
-        gas: 210000n,
-        gasPrice: 1000000000n,
       })
       toast.push({ title: 'Chess game creation submitted', description: hash.slice(0, 12), variant: 'success' })
       const findGameId = (value: unknown): string | null => {
@@ -70,7 +80,7 @@ export function NewChessGameModal({ open, onClose }: { open: boolean; onClose: (
       for (let attempt = 0; attempt < 30 && !gameId; attempt += 1) {
         try {
           const txhash = hash.startsWith('0x') ? hash.slice(2) : hash
-          const eventsResponse = await fetch(`http://127.0.0.1:8545/api/events?txhash=${encodeURIComponent(txhash)}`)
+          const eventsResponse = await fetch(`${env.indexerUrl}/api/events?txhash=${encodeURIComponent(txhash)}`)
           if (eventsResponse.ok) gameId = findGameId(await eventsResponse.json())
         } catch {
           // The event indexer may briefly be unavailable while the tx is mined.

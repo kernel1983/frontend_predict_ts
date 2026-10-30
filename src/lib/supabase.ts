@@ -32,6 +32,52 @@ export interface MarketRow {
   created_at: string
 }
 
+/** Row shape of the public `chess_games` table (see backend/supabase_schema.sql). */
+export interface ChessGameRow {
+  id: string
+  game_id: string
+  white: string
+  black: string | null
+  quote_tick: string | null
+  status: string
+  chain: string
+  block_number: number | null
+  tx_hash: string | null
+  note: string | null
+  created_at: string
+}
+
+/**
+ * Read chess games straight from Supabase (`chess_games` is RLS read-only for `anon`).
+ * Worker writes `chess_active` (both players joined) or `chess_waiting_for_opponent`.
+ */
+export type ChessGameStatus = 'chess_active' | 'chess_waiting_for_opponent'
+
+export async function fetchChessGames(status: ChessGameStatus = 'chess_active'): Promise<ChessGameRow[]> {
+  if (!supabaseConfigured()) {
+    throw new Error('Supabase 未配置：请设置 VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY')
+  }
+
+  const res = await fetch(
+    `${SUPABASE_URL}/rest/v1/chess_games?select=*&status=eq.${status}&order=created_at.desc`,
+    {
+      headers: {
+        apikey: SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+      },
+    },
+  )
+
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '')
+    throw new Error(`加载 chess_games 失败 (${res.status})${detail ? `: ${detail}` : ''}`)
+  }
+
+  const data: unknown = await res.json()
+  if (!Array.isArray(data)) return []
+  return data as ChessGameRow[]
+}
+
 /** Read open markets straight from Supabase (RLS exposes the table read-only to `anon`). */
 export async function fetchMarkets(): Promise<MarketRow[]> {
   if (!supabaseConfigured()) {

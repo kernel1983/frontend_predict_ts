@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { useAccount } from '@/lib/dynamic'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { NewChessGameModal } from '@/components/chess/NewChessGameModal'
+import { OngoingChessGames, WaitingChessGames } from '@/components/chess/ChessGames'
 import {
   PredictionCard,
   type PredictionMarket,
@@ -178,7 +179,7 @@ export default function HomePage() {
           <button type="button" onClick={() => setShowNewChessGame(true)} className="mb-4 ml-auto block w-fit rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white transition-opacity hover:opacity-90">
             + New chess game
           </button>
-          <Link to="/chess/1" className="flex items-center gap-4 transition-colors hover:opacity-80">
+          <div className="flex items-center gap-4">
             <span className="text-4xl leading-none" aria-hidden="true">♞</span>
             <div>
               <div className="flex items-center gap-2">
@@ -187,7 +188,10 @@ export default function HomePage() {
               </div>
               <p className="mt-1 text-sm text-text">Predict white win, draw, or black win.</p>
             </div>
-          </Link>
+          </div>
+          <div className="mt-4">
+            <WaitingChessGames />
+          </div>
         </div>
         <NewChessGameModal open={showNewChessGame} onClose={() => setShowNewChessGame(false)} />
       </section>
@@ -216,6 +220,8 @@ export default function HomePage() {
           暂无开放中的市场。
         </p>
       )}
+
+      <OngoingChessGames />
 
       {featured && (
         <section className="mt-8">

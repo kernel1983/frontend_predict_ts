@@ -76,7 +76,6 @@ export function ClaimCard({
         value: 0n,
         data,
         gas: 210000n,
-        gasPrice: 1000000000n,
       })
       setTxHash(hash)
       toast.push({ title: `Claim ${token} submitted`, variant: 'success' })

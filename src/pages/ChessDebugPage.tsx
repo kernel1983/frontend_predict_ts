@@ -5,9 +5,9 @@ import { NewChessGameModal } from '@/components/chess/NewChessGameModal'
 import { cn } from '@/lib/cn'
 import { useToast } from '@/components/ui/toast-context'
 import { useChainModeStore } from '@/store/chainMode'
-import { useAccount, useDynamicWallet, useSendTransaction } from '@/lib/dynamic'
+import { useAccount, useChains, useDynamicWallet, useSendTransaction } from '@/lib/dynamic'
 import { ensureWalletChain, isUserRejected, toErrorMessage } from '@/lib/wallet'
-import { ZEN_CONTRACT, buildZenCallData } from '@/lib/zentra'
+import { ZENTRA_ENVS, ZEN_CONTRACT, buildZenCallData } from '@/lib/zentra'
 
 type Outcome = 'white' | 'draw' | 'black'
 
@@ -199,6 +199,8 @@ function legalTargets(board: string[][], r: number, c: number): [number, number]
 export default function ChessDebugPage() {
   const { gameId = '1' } = useParams()
   const { mode } = useChainModeStore()
+  const env = ZENTRA_ENVS[mode]
+  const chains = useChains()
   const { address } = useAccount()
   const toast = useToast()
   const wallet = useDynamicWallet()
@@ -230,7 +232,7 @@ export default function ChessDebugPage() {
   const loadChessHistory = useCallback(async () => {
     try {
       const prefix = `chess-chess_state:${gameId}`
-      const response = await fetch(`http://127.0.0.1:8545/api/query_recent_state?prefix=${encodeURIComponent(prefix)}`)
+      const response = await fetch(`${env.indexerUrl}/api/query_recent_state?prefix=${encodeURIComponent(prefix)}`)
       if (!response.ok) throw new Error(`Node returned ${response.status}`)
       const payload: { result?: ChessHistoryEntry[] } = await response.json()
       const stateEntries = (payload.result ?? []).filter((entry) => Array.isArray(entry.value?.chess_board))
@@ -300,7 +302,7 @@ export default function ChessDebugPage() {
   const mineBlock = useCallback(async () => {
     setMoveError(null)
     try {
-      await fetch('http://127.0.0.1:8545', {
+      await fetch(env.indexerUrl, {
         method: 'POST',
         mode: 'no-cors',
         headers: { 'Content-Type': 'text/plain' },
@@ -310,7 +312,7 @@ export default function ChessDebugPage() {
     } catch (err) {
       setMoveError(toErrorMessage(err))
     }
-  }, [toast])
+  }, [env, toast])
 
   const sendMove = useCallback(async (move: string) => {
     setMoveError(null)
@@ -321,26 +323,32 @@ export default function ChessDebugPage() {
     setSendingMove(true)
     try {
       const walletOrProvider = wallet ?? (typeof window !== 'undefined' ? (window as { ethereum?: unknown }).ethereum : null)
+      const targetChain = chains.find((item) => item.id === env.withdrawChainId)
       await ensureWalletChain(walletOrProvider as never, {
-        chainId: 31337,
-        chainName: 'Local Zentra',
-        nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
-        rpcUrls: ['http://127.0.0.1:8545'],
+        chainId: env.withdrawChainId,
+        chainName: targetChain?.name ?? env.withdrawChainName,
+        nativeCurrency: targetChain?.nativeCurrency ?? {
+          name: 'Ether',
+          symbol: 'ETH',
+          decimals: 18,
+        },
+        rpcUrls: targetChain?.rpcUrls.default.http ?? [],
+        blockExplorerUrls: targetChain?.blockExplorers?.default
+          ? [targetChain.blockExplorers.default.url]
+          : undefined,
       })
       const data = buildZenCallData('chess_make_move', [gameId, move])
       const hash = await sendTransactionAsync({
-        chainId: 31337,
+        chainId: env.withdrawChainId,
         account: address as `0x${string}`,
         to: ZEN_CONTRACT,
         value: 0n,
         data,
-        gas: 210000n,
-        gasPrice: 1000000000n,
       })
       setTxHash(hash)
       toast.push({ title: 'Move submitted', description: move, variant: 'success' })
       try {
-        await fetch('http://127.0.0.1:8545', {
+        await fetch(env.indexerUrl, {
           method: 'POST',
           mode: 'no-cors',
           headers: { 'Content-Type': 'text/plain' },
@@ -355,7 +363,7 @@ export default function ChessDebugPage() {
     } finally {
       setSendingMove(false)
     }
-  }, [address, gameId, sendTransactionAsync, toast, wallet])
+  }, [address, chains, env, gameId, sendTransactionAsync, toast, wallet])
 
   const submitMove = useCallback((move: string) => {
     setGeneratedCall(JSON.stringify({ p: 'zentest3', f: 'chess_make_move', a: [gameId, move] }))
