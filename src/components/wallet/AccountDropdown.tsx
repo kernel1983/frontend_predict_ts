@@ -1,21 +1,54 @@
-import { Link, useNavigate } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import { useState } from 'react'
 import { useAccount, useDisconnect } from '@/lib/dynamic'
-import { useDisconnect as useWagmiDisconnect } from 'wagmi'
+import {
+  useConnect,
+  useConnectors,
+  useDisconnect as useWagmiDisconnect,
+} from 'wagmi'
 import { useToast } from '@/components/ui/toast-context'
-import { copyToClipboard, shortAddress } from '@/lib/wallet'
+import { copyToClipboard, clearAuthStorage, isUserRejected, lastWagmiConnectorUid, shortAddress, toErrorMessage } from '@/lib/wallet'
 import { supabase, supabaseConfigured } from '@/lib/supabase'
+import { useSession } from '@/hooks/useSession'
 import { AccountBadge } from './AccountBadge'
 
 export function AccountDropdown() {
   const { address, chain } = useAccount()
+  const { user } = useSession()
   const { disconnectAsync } = useDisconnect()
   const { disconnectAsync: wagmiDisconnect } = useWagmiDisconnect()
+  const { connectAsync, isPending: reconnecting } = useConnect()
+  const connectors = useConnectors()
   const toast = useToast()
-  const navigate = useNavigate()
   const [open, setOpen] = useState(false)
 
-  if (!address) {
+  const handleReconnect = async () => {
+    const uid = lastWagmiConnectorUid()
+    const connector =
+      connectors.find((item) => item.uid === uid) ??
+      connectors.find((item) => item.type === 'injected')
+    if (!connector) {
+      toast.push({ title: 'No wallet available to reconnect', variant: 'error' })
+      return
+    }
+    try {
+      await connectAsync({ connector })
+      toast.push({ title: 'Wallet reconnected', variant: 'success' })
+      setOpen(false)
+    } catch (err) {
+      toast.push({
+        title: 'Reconnect failed',
+        description: isUserRejected(err) ? 'Connection cancelled' : toErrorMessage(err),
+        variant: 'error',
+      })
+    }
+  }
+
+  // 钱包可能在浏览器重启后未自动重连（如 MetaMask 锁定时 eth_accounts 返回空），
+  // 登录态以 Supabase 会话为准，地址优先用钱包的，退回会话里的元数据地址。
+  const displayAddress = address ?? user?.address ?? null
+
+  if (!displayAddress) {
     return (
       <Link
         to="/login"
@@ -28,7 +61,7 @@ export function AccountDropdown() {
 
   const handleCopy = async () => {
     try {
-      await copyToClipboard(address)
+      await copyToClipboard(displayAddress)
       toast.push({ title: 'Address copied', variant: 'success' })
     } catch {
       toast.push({ title: 'Copy failed', variant: 'error' })
@@ -47,7 +80,8 @@ export function AccountDropdown() {
     }
     await disconnectAsync().catch(() => {})
     await wagmiDisconnect().catch(() => {})
-    navigate('/login')
+    clearAuthStorage()
+    window.location.assign('/login')
   }
 
   return (
@@ -57,7 +91,7 @@ export function AccountDropdown() {
         onClick={() => setOpen((v) => !v)}
         className="transition-opacity hover:opacity-85"
       >
-        <AccountBadge address={address} />
+        <AccountBadge address={displayAddress} />
       </button>
 
       {open && (
@@ -67,12 +101,29 @@ export function AccountDropdown() {
             <div className="border-b border-border px-4 py-3">
               <p className="text-xs text-text">Current account</p>
               <p className="mt-0.5 truncate font-mono text-sm text-text-h">
-                {address}
+                {displayAddress}
               </p>
               {chain?.name && (
                 <p className="mt-1 text-xs text-text">
                   Network: <span className="text-text-h">{chain.name}</span>
                 </p>
+              )}
+              {!address && (
+                <>
+                  <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">
+                    Wallet not connected — reconnect to sign transactions.
+                  </p>
+                  <button
+                    type="button"
+                    disabled={reconnecting}
+                    onClick={() => {
+                      void handleReconnect()
+                    }}
+                    className="mt-2 w-full rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    {reconnecting ? 'Reconnecting…' : 'Reconnect wallet'}
+                  </button>
+                </>
               )}
             </div>
             <div className="p-1.5">
@@ -100,7 +151,7 @@ export function AccountDropdown() {
                     strokeLinecap="round"
                   />
                 </svg>
-                Copy address ({shortAddress(address)})
+                Copy address ({shortAddress(displayAddress)})
               </button>
               <button
                 type="button"

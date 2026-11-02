@@ -160,6 +160,36 @@ export function isAddressLike(value: unknown): value is string {
   return typeof value === 'string' && ADDRESS_RE.test(value)
 }
 
+export function clearAuthStorage(): void {
+  if (typeof window === 'undefined') return
+  const removals: string[] = []
+  for (let i = 0; i < window.localStorage.length; i += 1) {
+    const key = window.localStorage.key(i)
+    if (!key) continue
+    if (key === 'wagmi.store' || key.startsWith('dynamic_') || key.startsWith('sb-')) {
+      removals.push(key)
+    }
+  }
+  for (const key of removals) window.localStorage.removeItem(key)
+}
+
+export function lastWagmiConnectorUid(): string | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = window.localStorage.getItem('wagmi.store')
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as {
+      state?: { connections?: { value?: Record<string, unknown> } }
+    }
+    const connections = parsed.state?.connections?.value
+    if (!connections || typeof connections !== 'object') return null
+    const uid = Object.keys(connections)[0]
+    return uid ?? null
+  } catch {
+    return null
+  }
+}
+
 export function accountColor(address: string): string {
   const hex = address.slice(2, 10)
   const n = Number.parseInt(hex, 16) || 0

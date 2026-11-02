@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useChainId, useChains, useDisconnect } from '@/lib/dynamic'
 import { Button } from '@/components/ui/Button'
 import { Spinner } from '@/components/ui/Spinner'
-import { isWalletNotRegistered, shortAddress, toErrorMessage } from '@/lib/wallet'
+import { isWalletNotRegistered, shortAddress, toErrorMessage, clearAuthStorage } from '@/lib/wallet'
 import { supabase, supabaseConfigured } from '@/lib/supabase'
 import { useSiweLogin } from '@/hooks/useSiweLogin'
 import { Avatar } from './Avatar'
@@ -196,7 +196,12 @@ export function SignInCard({ address }: SignInCardProps) {
         type="button"
         disabled={verifying}
         onClick={() => {
-          void disconnectAsync()
+          disconnectAsync()
+            .catch(() => {})
+            .finally(() => {
+              clearAuthStorage()
+              window.location.reload()
+            })
         }}
         className="block w-full text-center text-sm text-text transition-colors hover:text-text-h disabled:pointer-events-none disabled:opacity-50"
       >

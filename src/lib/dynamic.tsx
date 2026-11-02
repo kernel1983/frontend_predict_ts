@@ -100,7 +100,9 @@ function parseNetworkId(value: string | number): number {
 export function useDynamicWallet(): SignerWallet | null {
   const context = useDynamicContextSafe()
   const primaryWallet = context?.primaryWallet
-  if (primaryWallet && isEthereumWallet(primaryWallet)) {
+  // Dynamic 会从 localStorage 恢复 primaryWallet，但过期会话下 user 为空。
+  // 只认已认证的钱包，否则死会话会让页面误判为已连接而卡在签名步骤。
+  if (primaryWallet && context?.user && isEthereumWallet(primaryWallet)) {
     return primaryWallet as unknown as SignerWallet
   }
   return null

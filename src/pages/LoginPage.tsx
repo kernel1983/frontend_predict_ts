@@ -7,6 +7,7 @@ import { WalletModal } from '@/components/wallet/WalletModal'
 import { useAccount, useDynamicContextSafe } from '@/lib/dynamic'
 import { useAccount as useWagmiAccount, useDisconnect as useWagmiDisconnect } from 'wagmi'
 import { useSession } from '@/hooks/useSession'
+import { clearAuthStorage } from '@/lib/wallet'
 
 export default function LoginPage() {
   const { user, status } = useSession()
@@ -42,6 +43,11 @@ export default function LoginPage() {
   const handleWalletConnected = () => {
     // 互斥：登出 Dynamic
     void dyn?.handleLogOut?.().catch(() => {})
+  }
+
+  const handleReset = () => {
+    clearAuthStorage()
+    window.location.reload()
   }
 
   return (
@@ -84,6 +90,14 @@ export default function LoginPage() {
             <span className="text-accent">Terms of Service</span> and{' '}
             <span className="text-accent">Privacy Policy</span>
           </p>
+
+          <button
+            type="button"
+            onClick={handleReset}
+            className="mt-4 block w-full text-center text-xs text-text underline hover:text-text-h"
+          >
+            Can't sign in or out? Reset local state
+          </button>
         </div>
       </div>
 

@@ -320,6 +320,7 @@ export default function ChessDebugPage() {
           ? 'b'
           : null
   const isMyTurn = !gameOver && state?.chess_status === 'chess_active' && myColor !== null && state?.chess_turn === myColor
+  const tradingLocked = state?.chess_status === 'chess_waiting_for_opponent'
 
   const stakeRaw = state?.chess_stake
   const stakeBig =
@@ -747,7 +748,8 @@ export default function ChessDebugPage() {
                       ))}
                     </div>
                   </div>
-                  <button type="button" onClick={() => setSubmitted(true)} className="mt-3 w-full rounded-lg bg-accent px-3 py-2.5 text-sm font-semibold text-white">Place {advancedAction === 'buy' ? 'Buy' : 'Sell'} Limit Order</button>
+                  <button type="button" onClick={() => setSubmitted(true)} disabled={tradingLocked} title={tradingLocked ? "Trading is locked until the opponent joins" : undefined} className="mt-3 w-full rounded-lg bg-accent px-3 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40">Place {advancedAction === 'buy' ? 'Buy' : 'Sell'} Limit Order</button>
+                  {tradingLocked && <p className="mt-2 text-xs text-amber-700 dark:text-amber-400">Buying and selling are locked until the opponent joins.</p>}
                 </>
               ) : (
                 <>
@@ -770,7 +772,7 @@ export default function ChessDebugPage() {
           )}
           {!gameOver && state?.chess_status === 'chess_waiting_for_opponent' && (
             <p className="mt-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm font-medium text-amber-700 dark:text-amber-400">
-              Waiting for opponent to join
+              Waiting for opponent to join — buying and selling are locked until then.
             </p>
           )}
           <div className="mt-4 space-y-2">{outcomes.filter((outcome) => outcome.value !== 'draw').map((outcome) => {
@@ -792,7 +794,7 @@ export default function ChessDebugPage() {
               <span className="text-sm text-text">U</span>
             </div>
           </div>
-          <button type="button" onClick={() => setSubmitted(true)} className="mt-5 w-full rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-90">Buy {selection === 'white' ? 'White wins' : 'Black wins'} · {basicAmount || '0'} U</button>
+          <button type="button" onClick={() => setSubmitted(true)} disabled={tradingLocked} title={tradingLocked ? "Trading is locked until the opponent joins" : undefined} className="mt-5 w-full rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40">Buy {selection === 'white' ? 'White wins' : 'Black wins'} · {basicAmount || '0'} U</button>
           {submitted && <p role="status" className="mt-3 rounded-lg bg-accent-bg px-3 py-2 text-sm text-accent">Market order submitted: {selection === 'white' ? 'White wins' : 'Black wins'} · {basicAmount || '0'} U</p>}
           <button type="button" onClick={() => { setSelection('white'); setBasicAmount(''); setSubmitted(false) }} className="mt-3 w-full rounded-lg border border-border px-3 py-2 text-xs font-semibold text-text hover:border-accent-border hover:text-text-h">Clear all</button>
             </>
