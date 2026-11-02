@@ -7,7 +7,18 @@ import { useToast } from '@/components/ui/toast-context'
 import { useChainModeStore } from '@/store/chainMode'
 import { useAccount, useChains, useDynamicWallet, useSendTransaction } from '@/lib/dynamic'
 import { ensureWalletChain, isUserRejected, toErrorMessage } from '@/lib/wallet'
-import { ZENTRA_ENVS, ZEN_CONTRACT, buildZenCallData } from '@/lib/zentra'
+import { useQuery } from '@tanstack/react-query'
+import { ZENTRA_ENVS, ZEN_CONTRACT, buildZenCallData, fetchRawState, formatUsdc, parseUsdcAmount } from '@/lib/zentra'
+import { DepositModal } from '@/components/wallet/DepositModal'
+import { Button } from '@/components/ui/Button'
+import { useUsdcBalance } from '@/hooks/useUsdcBalance'
+import { useSession } from '@/hooks/useSession'
+import {
+  computeDepositAddress,
+  depositFactoriesByMode,
+  type DepositFactoryConfig,
+} from '@/lib/deposit'
+import { formatAmount } from '@/lib/amounts'
 
 type Outcome = 'white' | 'draw' | 'black'
 
@@ -20,6 +31,7 @@ interface ChessState {
   chess_winner?: string | null
   chess_white?: string
   chess_black?: string | null
+  chess_stake?: string | number
 }
 
 interface ChessHistoryEntry {
@@ -228,6 +240,16 @@ export default function ChessDebugPage() {
   const [moveError, setMoveError] = useState<string | null>(null)
   const [sendingMove, setSendingMove] = useState(false)
   const [showNewGame, setShowNewGame] = useState(false)
+  const [depositOpen, setDepositOpen] = useState(false)
+  const { data: balance, isLoading: balanceLoading, error: balanceError } = useUsdcBalance(address)
+  const { user } = useSession()
+  const factories: DepositFactoryConfig[] = depositFactoriesByMode[mode]
+  const predicted = address
+    ? factories.map((config) => ({
+        config,
+        address: computeDepositAddress(config.factory, address, config.initCode),
+      }))
+    : []
 
   const loadChessHistory = useCallback(async () => {
     try {
@@ -299,20 +321,33 @@ export default function ChessDebugPage() {
           : null
   const isMyTurn = !gameOver && state?.chess_status === 'chess_active' && myColor !== null && state?.chess_turn === myColor
 
-  const mineBlock = useCallback(async () => {
-    setMoveError(null)
-    try {
-      await fetch(env.indexerUrl, {
-        method: 'POST',
-        mode: 'no-cors',
-        headers: { 'Content-Type': 'text/plain' },
-        body: JSON.stringify({ jsonrpc: '2.0', method: 'zentra_nextBlock', id: 1 }),
-      })
-      toast.push({ title: 'Block mined', variant: 'success' })
-    } catch (err) {
-      setMoveError(toErrorMessage(err))
-    }
-  }, [env, toast])
+  const stakeRaw = state?.chess_stake
+  const stakeBig =
+    stakeRaw === undefined || stakeRaw === null
+      ? null
+      : typeof stakeRaw === 'string'
+        ? /^\d+$/.test(stakeRaw) ? BigInt(stakeRaw) : null
+        : Number.isFinite(stakeRaw) && stakeRaw >= 0
+          ? BigInt(Math.round(stakeRaw))
+          : null
+  const stakeLabel = stakeBig === null ? null : formatUsdc(stakeBig, 2)
+
+  const shareBalances = useQuery({
+    queryKey: ['chess-share-balances', mode, gameId, address?.toLowerCase() ?? '', history.length],
+    queryFn: async () => {
+      const addr = (address as string).toLowerCase()
+      const [yesRaw, noRaw] = await Promise.all([
+        fetchRawState(`chess_predict-${gameId}_yes_balance:${addr}`),
+        fetchRawState(`chess_predict-${gameId}_no_balance:${addr}`),
+      ])
+      return { yesRaw, noRaw }
+    },
+    enabled: Boolean(address),
+    refetchInterval: 5_000,
+  })
+  const yesRaw = shareBalances.data?.yesRaw ?? '0'
+  const noRaw = shareBalances.data?.noRaw ?? '0'
+  const fmtShares = (raw: string) => formatAmount(BigInt(raw || '0'), 6, 2)
 
   const sendMove = useCallback(async (move: string) => {
     setMoveError(null)
@@ -347,26 +382,94 @@ export default function ChessDebugPage() {
       })
       setTxHash(hash)
       toast.push({ title: 'Move submitted', description: move, variant: 'success' })
-      try {
-        await fetch(env.indexerUrl, {
-          method: 'POST',
-          mode: 'no-cors',
-          headers: { 'Content-Type': 'text/plain' },
-          body: JSON.stringify({ jsonrpc: '2.0', method: 'zentra_nextBlock', id: 1 }),
-        })
-      } catch (err) {
-        setMoveError('Move sent, but mining (next block) failed. Retry mining.')
-      }
+      await loadChessHistory()
     } catch (err) {
       console.error('[chess] move failed', err)
       if (!isUserRejected(err)) setMoveError(toErrorMessage(err))
     } finally {
       setSendingMove(false)
     }
-  }, [address, chains, env, gameId, sendTransactionAsync, toast, wallet])
+  }, [address, chains, env, gameId, loadChessHistory, sendTransactionAsync, toast, wallet])
 
-  const submitMove = useCallback((move: string) => {
-    setGeneratedCall(JSON.stringify({ p: 'zentest3', f: 'chess_make_move', a: [gameId, move] }))
+  const joinGame = useCallback(async () => {
+    setMoveError(null)
+    if (!address) {
+      setMoveError('Connect a wallet first.')
+      return
+    }
+    if (!state?.chess_white || myColor !== null) return
+    setSendingMove(true)
+    try {
+      const walletOrProvider = wallet ?? (typeof window !== 'undefined' ? (window as { ethereum?: unknown }).ethereum : null)
+      const targetChain = chains.find((item) => item.id === env.withdrawChainId)
+      await ensureWalletChain(walletOrProvider as never, {
+        chainId: env.withdrawChainId,
+        chainName: targetChain?.name ?? env.withdrawChainName,
+        nativeCurrency: targetChain?.nativeCurrency ?? { name: 'Ether', symbol: 'ETH', decimals: 18 },
+        rpcUrls: targetChain?.rpcUrls.default.http ?? [],
+        blockExplorerUrls: targetChain?.blockExplorers?.default
+          ? [targetChain.blockExplorers.default.url]
+          : undefined,
+      })
+      const hash = await sendTransactionAsync({
+        chainId: env.withdrawChainId,
+        account: address as `0x${string}`,
+        to: ZEN_CONTRACT,
+        value: 0n,
+        data: buildZenCallData('chess_join_game', [gameId]),
+      })
+      setTxHash(hash)
+      toast.push({ title: 'Joined game', variant: 'success' })
+      await loadChessHistory()
+    } catch (err) {
+      if (!isUserRejected(err)) setMoveError(toErrorMessage(err))
+    } finally {
+      setSendingMove(false)
+    }
+  }, [address, chains, env, gameId, loadChessHistory, myColor, sendTransactionAsync, state?.chess_white, toast, wallet])
+
+  const mintTokens = useCallback(async () => {
+    setMoveError(null)
+    if (!address) {
+      setMoveError('Connect a wallet first.')
+      return
+    }
+    const raw = parseUsdcAmount(advancedAmount.trim())
+    if (raw === null || raw <= 0n) {
+      setMoveError('Enter a valid mint amount.')
+      return
+    }
+    setSendingMove(true)
+    try {
+      const walletOrProvider = wallet ?? (typeof window !== 'undefined' ? (window as { ethereum?: unknown }).ethereum : null)
+      const targetChain = chains.find((item) => item.id === env.withdrawChainId)
+      await ensureWalletChain(walletOrProvider as never, {
+        chainId: env.withdrawChainId,
+        chainName: targetChain?.name ?? env.withdrawChainName,
+        nativeCurrency: targetChain?.nativeCurrency ?? { name: 'Ether', symbol: 'ETH', decimals: 18 },
+        rpcUrls: targetChain?.rpcUrls.default.http ?? [],
+        blockExplorerUrls: targetChain?.blockExplorers?.default
+          ? [targetChain.blockExplorers.default.url]
+          : undefined,
+      })
+      const hash = await sendTransactionAsync({
+        chainId: env.withdrawChainId,
+        account: address as `0x${string}`,
+        to: ZEN_CONTRACT,
+        value: 0n,
+        data: buildZenCallData('chess_predict_mint', [gameId, raw.toString()]),
+      })
+      setTxHash(hash)
+      toast.push({ title: 'Mint submitted', description: `${advancedAmount} USDC → YES + NO`, variant: 'success' })
+      setSubmitted(true)
+    } catch (err) {
+      if (!isUserRejected(err)) setMoveError(toErrorMessage(err))
+    } finally {
+      setSendingMove(false)
+    }
+  }, [address, advancedAmount, chains, env, gameId, sendTransactionAsync, toast, wallet])
+
+  const submitMove = useCallback((move: string) => {    setGeneratedCall(JSON.stringify({ p: 'zentest3', f: 'chess_make_move', a: [gameId, move] }))
     setPendingMove(move)
     setPromotionMove(null)
     void sendMove(move)
@@ -414,10 +517,14 @@ export default function ChessDebugPage() {
           <h1 className="mt-3 text-2xl font-semibold text-text-h">Chess match prediction</h1>
           <p className="mt-1 text-sm text-text">On-chain state for {gameId} · choose the result you expect.</p>
         </div>
-        <div className="rounded-xl border border-border bg-bg px-4 py-3 text-right shadow-card">
-          <p className="text-xs text-text">Position</p>
-          <p className="mt-0.5 font-mono text-sm font-medium text-text-h">{loading ? 'Loading…' : state?.chess_status ?? 'Unavailable'}</p>
-          <p className="mt-0.5 text-xs text-text">Moves played: {state?.chess_move_count ?? 0}</p>
+        <div className="flex items-center gap-3">
+          <Link to="/portfolio" className="rounded-xl border border-border bg-bg px-3 py-2 text-right shadow-card transition-colors hover:border-accent-border" aria-label="View portfolio">
+            <p className="text-xs text-text">Available</p>
+            <p className="font-mono text-sm font-medium text-text-h">
+              {balanceLoading ? '…' : balanceError ? '—' : `${formatUsdc(balance ?? 0n, 2)} USDC`}
+            </p>
+          </Link>
+          <Button size="md" onClick={() => setDepositOpen(true)}>Deposit</Button>
         </div>
       </div>
       <div className="mt-4 flex justify-end">
@@ -426,6 +533,14 @@ export default function ChessDebugPage() {
         </button>
       </div>
       <NewChessGameModal open={showNewGame} onClose={() => setShowNewGame(false)} />
+      <DepositModal
+        open={depositOpen}
+        onClose={() => setDepositOpen(false)}
+        predicted={predicted}
+        deposits={user?.deposits ?? {}}
+        walletConnected={Boolean(address)}
+        mainnet={mode === 'mainnet'}
+      />
       <div className={cn(
         'mt-5 flex flex-wrap items-center justify-between gap-4 rounded-2xl border px-5 py-4 shadow-card',
         isMyTurn ? 'border-accent bg-accent-bg' : 'border-border bg-bg',
@@ -463,14 +578,34 @@ export default function ChessDebugPage() {
       )}
       {!gameOver && state?.chess_status === 'chess_waiting_for_opponent' && (
         <div className="mt-4 rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-center">
-          <p className="text-base font-semibold text-amber-700 dark:text-amber-400">
-            Waiting for opponent to join
-          </p>
-          {state?.chess_white && (
-            <p className="mt-1 font-mono text-xs text-text">
-              White: {state.chess_white}
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-base font-semibold text-amber-700 dark:text-amber-400">
+              Waiting for opponent to join
             </p>
-          )}
+            {!myColor && (
+              <button
+                type="button"
+                onClick={() => void joinGame()}
+                disabled={submitting || sendingMove || !address}
+                className="shrink-0 rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {!address ? 'Connect wallet to join' : submitting || sendingMove ? 'Joining…' : 'Join game'}
+              </button>
+            )}
+          </div>
+          <div className="mt-2 flex items-center justify-between gap-3 text-xs text-text">
+            <span className="truncate text-left font-mono">
+              White: {state?.chess_white ?? '—'}
+            </span>
+            <span className="shrink-0 text-right font-medium">
+              Black: Waiting
+            </span>
+          </div>
+          <p className="mt-2 text-left text-xs font-medium text-amber-700 dark:text-amber-400">
+            {stakeLabel
+              ? `Joining requires staking ${stakeLabel} USDC — it will be escrowed and matched against the creator's stake.`
+              : 'Joining is free — this game has no stake.'}
+          </p>
         </div>
       )}
       <div className="mt-7 grid items-start gap-7 lg:grid-cols-[minmax(0,1fr)_320px]">
@@ -606,7 +741,7 @@ export default function ChessDebugPage() {
                     <div className="mt-1 grid grid-cols-2 gap-2">
                       {(['yes', 'no'] as const).map((token) => (
                         <button key={token} type="button" onClick={() => setAdvancedToken(token)} className={cn('rounded-lg border px-3 py-2 text-left transition-colors', advancedToken === token ? 'border-accent bg-accent-bg' : 'border-border bg-bg hover:border-accent-border')}>
-                          <p className="font-mono text-sm font-semibold text-text-h">—</p>
+                          <p className="font-mono text-sm font-semibold text-text-h">{token === 'yes' ? fmtShares(yesRaw) : fmtShares(noRaw)}</p>
                           <p className="mt-0.5 text-xs font-semibold tracking-wider text-text">{token === 'yes' ? 'White wins' : 'Black wins'}</p>
                         </button>
                       ))}
@@ -618,7 +753,10 @@ export default function ChessDebugPage() {
                 <>
                   <p className="mt-3 text-xs text-text">Mint a complete YES + NO pair into your wallet.</p>
                   <label className="mt-3 block text-xs text-text">Mint amount<input value={advancedAmount} onChange={(event) => setAdvancedAmount(event.target.value)} inputMode="decimal" className="mt-1 h-10 w-full rounded-lg border border-border bg-bg px-2 font-mono text-sm text-text-h" /></label>
-                  <button type="button" onClick={() => setSubmitted(true)} className="mt-3 w-full rounded-lg bg-accent px-3 py-2.5 text-sm font-semibold text-white">Mint tokens</button>
+                  <button type="button" onClick={() => void mintTokens()} disabled={sendingMove || submitting || !address} className="mt-3 w-full rounded-lg bg-accent px-3 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40">
+                    {!address ? 'Connect wallet to mint' : sendingMove || submitting ? 'Minting…' : 'Mint tokens'}
+                  </button>
+                  {moveError && <p className="mt-2 text-xs text-red-500">{moveError}</p>}
                 </>
               )}
               <p className="mt-3 text-[11px] text-text">Advanced trading requires a connected wallet and a live prediction market.</p>
@@ -639,6 +777,9 @@ export default function ChessDebugPage() {
             const selected = selection === outcome.value
             return <button key={outcome.value} type="button" onClick={() => { setSelection(outcome.value); setSubmitted(false) }} className={cn('flex w-full items-center justify-between rounded-xl border p-3 text-left transition-colors', selected ? 'border-accent bg-accent-bg' : 'border-border hover:border-accent-border')}><span><span className="block font-medium text-text-h">{outcome.title}</span><span className="text-xs text-text">{outcome.detail}</span></span><span className="font-mono text-sm font-medium text-text-h">{outcome.odds}</span></button>
           })}</div>
+          <p className="mt-3 text-xs text-text">
+            Your holdings · <span className="font-mono text-text-h">YES {fmtShares(yesRaw)}</span> · <span className="font-mono text-text-h">NO {fmtShares(noRaw)}</span>
+          </p>
           <div className="mt-4">
             <p className="text-xs font-medium text-text">Market order amount</p>
             <div className="mt-2 grid grid-cols-3 gap-2">
@@ -672,8 +813,8 @@ export default function ChessDebugPage() {
               )}
               {moveError && <p className="mt-2 text-xs text-red-500">{moveError}</p>}
               {txHash && <p className="mt-2 break-all font-mono text-xs text-text">tx: {txHash}</p>}
-              <button type="button" onClick={() => void mineBlock()} className="mt-2 w-full rounded-lg border border-border px-3 py-2 text-xs font-semibold text-text hover:border-accent-border">
-                Mine block / retry
+              <button type="button" onClick={() => void loadChessHistory()} className="mt-2 w-full rounded-lg border border-border px-3 py-2 text-xs font-semibold text-text hover:border-accent-border">
+                Refresh
               </button>
             </div>
           )}

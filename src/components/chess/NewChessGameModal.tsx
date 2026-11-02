@@ -2,13 +2,13 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAccount, useChains, useDynamicWallet, useSendTransaction } from '@/lib/dynamic'
 import { useToast } from '@/components/ui/toast-context'
-import { ensureWalletChain, isUserRejected, toErrorMessage } from '@/lib/wallet'
-import { ZENTRA_ENVS, ZEN_CONTRACT, buildZenCallData } from '@/lib/zentra'
+import { ensureWalletChain, isAddressLike, isUserRejected, toErrorMessage } from '@/lib/wallet'
+import { ZENTRA_ENVS, ZEN_CONTRACT, buildZenCallData, parseUsdcAmount } from '@/lib/zentra'
 import { useChainModeStore } from '@/store/chainMode'
 
 export function NewChessGameModal({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const [opponentAddress, setOpponentAddress] = useState('')
-  const [createMode, setCreateMode] = useState<'direct' | 'opponent'>('direct')
+  const [amount, setAmount] = useState('0')
+  const [inviterAddress, setInviterAddress] = useState('')
   const { address } = useAccount()
   const wallet = useDynamicWallet()
   const { sendTransactionAsync, isPending } = useSendTransaction()
@@ -24,6 +24,17 @@ export function NewChessGameModal({ open, onClose }: { open: boolean; onClose: (
     setError(null)
     if (!address) {
       setError('Connect a wallet first.')
+      return
+    }
+    const trimmedAmount = amount.trim()
+    const amountRaw = parseUsdcAmount(trimmedAmount)
+    if (amountRaw === null) {
+      setError('Enter a valid non-negative amount.')
+      return
+    }
+    const trimmedInviter = inviterAddress.trim()
+    if (trimmedInviter && !isAddressLike(trimmedInviter)) {
+      setError('Inviter address looks invalid.')
       return
     }
     try {
@@ -42,7 +53,9 @@ export function NewChessGameModal({ open, onClose }: { open: boolean; onClose: (
           ? [targetChain.blockExplorers.default.url]
           : undefined,
       })
-      const data = buildZenCallData('chess_create_game', createMode === 'opponent' ? [opponentAddress.trim()] : [])
+      const args: unknown[] = ['USDC', amountRaw.toString()]
+      if (trimmedInviter) args.push(trimmedInviter)
+      const data = buildZenCallData('chess_create_game', args)
       const hash = await sendTransactionAsync({
         chainId: env.withdrawChainId,
         account: address,
@@ -109,18 +122,18 @@ export function NewChessGameModal({ open, onClose }: { open: boolean; onClose: (
           <button type="button" onClick={onClose} className="text-sm text-text hover:text-text-h">✕</button>
         </div>
         <div className="mt-4 grid gap-3">
-          <button type="button" onClick={() => setCreateMode('direct')} className={`w-full rounded-xl border p-4 text-left transition-colors ${createMode === 'direct' ? 'border-accent bg-accent-bg' : 'border-border hover:border-accent-border'}`}>
-            <span className="block font-semibold text-text-h">Create directly</span>
-            <span className="mt-1 block text-xs text-text">Wait for any opponent to join.</span>
-          </button>
-          <div onClick={() => setCreateMode('opponent')} className={`w-full rounded-xl border p-4 text-left transition-colors ${createMode === 'opponent' ? 'border-accent bg-accent-bg' : 'border-border hover:border-accent-border'}`}>
-            <span className="block font-semibold text-text-h">Create with opponent</span>
-            {createMode === 'opponent' && <input value={opponentAddress} onChange={(event) => setOpponentAddress(event.target.value)} onClick={(event) => event.stopPropagation()} placeholder="0x… opponent address" className="mt-2 h-10 w-full rounded-lg border border-border bg-bg px-3 font-mono text-xs text-text-h" />}
-          </div>
+          <label className="block">
+            <span className="block text-xs font-medium text-text">Amount (USDC)</span>
+            <input value={amount} onChange={(event) => setAmount(event.target.value)} inputMode="decimal" placeholder="0" className="mt-1 h-10 w-full rounded-lg border border-border bg-bg px-3 text-sm text-text-h" />
+          </label>
+          <label className="block">
+            <span className="block text-xs font-medium text-text">Inviter address (optional)</span>
+            <input value={inviterAddress} onChange={(event) => setInviterAddress(event.target.value)} placeholder="0x… inviter address" className="mt-1 h-10 w-full rounded-lg border border-border bg-bg px-3 font-mono text-xs text-text-h" />
+          </label>
         </div>
         {error && <p className="mt-3 rounded-lg bg-red-500/10 px-3 py-2 text-xs text-red-500">{error}</p>}
         {createdGameId && <Link to={`/chess/${createdGameId}`} onClick={onClose} className="mt-3 block rounded-lg bg-accent-bg px-3 py-2 text-center text-sm font-semibold text-accent">Go to game {createdGameId} →</Link>}
-        <button type="button" disabled={isPending || waitingForEvent || (createMode === 'opponent' && !opponentAddress.trim())} onClick={() => void createGame()} className="mt-4 w-full rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40">{isPending ? 'Waiting for signature…' : waitingForEvent ? 'Waiting for game event…' : 'Create game'}</button>
+        <button type="button" disabled={isPending || waitingForEvent} onClick={() => void createGame()} className="mt-4 w-full rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40">{isPending ? 'Waiting for signature…' : waitingForEvent ? 'Waiting for game event…' : 'Create game'}</button>
       </div>
     </div>
   )
